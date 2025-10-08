@@ -15,11 +15,22 @@ A TVheadend client for watching and recording live TV on PC
 
 With TVHplayer you can:
 - Play live TV & radio channels
-- Browse EPG
+- Browse EPG with live progress bars showing current and upcoming programs
+  - Robust EPG handling with automatic recovery for missing UI elements
+  - Asynchronous updates keep UI responsive even with many channels
+  - Word-wrapped tooltips with max-width for better readability
 - Schedule recordings
-- Initiate instant recordings with custom duration 
-- Record live TV locally on your computer 
+- Initiate instant recordings with custom duration
+- Record live TV locally on your computer
 - Monitor your server status, signal strength and DVR
+- Customize channel icon sizes (48px - 100px)
+- Persistent UI state - your column widths, sort order, and window layout are remembered
+  - Debounced saving prevents excessive disk writes during resizing operations
+  - Server selection persists between sessions
+- Natural/human sorting for channel names (e.g., "Channel 1, 2, 10" not "1, 10, 2")
+  - Channels without numbers sort before numbered variants (e.g., "Channel HD" before "Channel 1 HD")
+- Per-server icon caching for fast switching between multiple TVHeadend servers
+- Column visibility control - show/hide columns via right-click on table header
 - TVHplayer is cross-platform - runs on linux, macOS and Windows
 
 ## Download
@@ -55,9 +66,20 @@ To do this:
 - Run the app with:
   `python3 tvhplayer/tvhplayer.py`
 
-## Technical information 
-- TVHplayer uses Tvheadend's http API (no htsp support yet)
-- For playback, it uses libvlc 
+## Technical information
+- TVHplayer uses Tvheadend's HTTP REST API (no HTSP support yet)
+- For playback, it uses libvlc with hardware acceleration support
+- Optimized HTTP requests with connection pooling and custom User-Agent
+- Per-server icon caching in `~/.config/tvhplayer/channel_icons/` (Linux/macOS) or `%APPDATA%/tvhplayer/channel_icons/` (Windows)
+- Custom natural sorting algorithm for channel names:
+  - Extracts base name and number from channel names
+  - Sorts alphabetically by base name, then numerically
+  - Channels without numbers (e.g., "HD") sort before numbered variants (e.g., "1 HD")
+- Robust error handling with automatic recovery:
+  - Empty table rows are automatically cleaned up after sorting
+  - Missing UI elements are created on-demand during EPG updates
+  - Graceful handling of incomplete data structures
+  - Proper EPG queue cleanup when switching servers (prevents stale data requests)
   
 ## Support development
 Bitcoin: `bc1qqtsyf0ft85zshsnw25jgsxnqy45rfa867zqk4t`

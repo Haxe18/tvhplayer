@@ -36,6 +36,21 @@
   <url type="bugtracker">https://github.com/mfat/tvhplayer/issues</url>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="4.0" date="2025-10-12">
+      <description>
+        <p>Major update with significant UI/UX improvements</p>
+        <ul>
+          <li>Debounced saving for column widths and splitter position</li>
+          <li>Server selection persists between sessions</li>
+          <li>UUID-based EPG row lookup for robustness</li>
+          <li>EPG queue management with proper cleanup on server switch</li>
+          <li>HTML-formatted tooltips with word-wrap (400px max-width)</li>
+          <li>Improved table sorting control and error handling</li>
+          <li>Natural sorting for channel names with/without numbers</li>
+          <li>Per-server icon caching in dedicated subdirectories</li>
+        </ul>
+      </description>
+    </release>
     <release version="3.5.5" date="2025-03-08">
       <description>
         <p>Initial Flatpak release</p>
