@@ -3,11 +3,13 @@ import sys
 import os
 from pathlib import Path
 
-script_dir = os.getcwd()
-project_dir = os.path.join(script_dir, 'tvhplayer')
+# SPECPATH is the directory containing this .spec file (macos/)
+# Repository root is one level up
+repo_root = os.path.dirname(SPECPATH)
+project_dir = os.path.join(repo_root, 'tvhplayer')
 
-# Define paths
-icons_dir = os.path.join(script_dir, 'icons')
+# Define paths relative to repository root
+icons_dir = os.path.join(repo_root, 'icons')
 
 # Collect all icon files
 icon_files = []
@@ -19,7 +21,7 @@ if os.path.exists(icons_dir):
 block_cipher = None
 
 a = Analysis(
-    ['tvhplayer/tvhplayer.py'],
+    [os.path.join(repo_root, 'tvhplayer', 'tvhplayer.py')],
     pathex=[project_dir],
     binaries=[],
     datas=icon_files,
@@ -89,7 +91,7 @@ exe = EXE(
 app = BUNDLE(
     exe,
     name='TVHplayer.app',
-    icon='tvhplayer.icns',  # Add the icon here
+    icon='icons/tvhplayer.png',
     bundle_identifier='com.tvhplayer.app',
     info_plist={
         'CFBundleName': 'TVHplayer',

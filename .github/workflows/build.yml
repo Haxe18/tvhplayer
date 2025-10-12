@@ -4,28 +4,37 @@ on:
   push:
     tags:
       - '*'  # Trigger on tag pushes, for versioning
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag for manual build (e.g., v1.0.0)'
+        required: false
+        default: 'manual-build'
+        type: string
+
 env:
   PYTHON_VERSION: "3.13"  # Python version
-  VERSION: ${{ github.ref_name }}  # GitHub reference name (e.g., tag)
-  
+  VERSION: ${{ github.event.inputs.version || github.ref_name }}
+
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
-        os: [macos-13, macos-14, windows-latest, ubuntu-latest]
+        os: [macos-14, macos-15, windows-latest, ubuntu-latest]
         include:
-          - os: macos-13
-            arch: x86_64  # macOS Intel
-            artifact_name: tvhplayer-${{ env.VERSION }}-macos-intel-x86
           - os: macos-14
-            arch: arm64  # macOS ARM64 (M1/M2)
-            artifact_name: tvhplayer-${{ env.VERSION }}-macos-arm64
+            arch: x86_64  # macOS Intel
+            artifact_name: tvhplayer-macos-intel
+          - os: macos-15
+            arch: arm64  # macOS Apple Silicon (M1/M2/M3)
+            artifact_name: tvhplayer-macos-silicon
           - os: windows-latest
             arch: amd64
-            artifact_name: tvhplayer-${{ env.VERSION }}-windows.exe
+            artifact_name: tvhplayer-windows
           - os: ubuntu-latest
             arch: amd64
-            artifact_name: tvhplayer-${{ env.VERSION }}-linux
+            artifact_name: tvhplayer-linux
 
     runs-on: ${{ matrix.os }}
 
@@ -37,38 +46,101 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'  # Cache pip dependencies
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Get the version from the latest tag
-        id: version
-        run: echo "VERSION=$(git describe --tags --abbrev=0)" >> $GITHUB_ENV
-
-      - name: Build executable
+      - name: Build Windows executable
+        if: runner.os == 'Windows'
         run: |
-          ARTIFACT_NAME="${{ matrix.artifact_name }}-${VERSION}"
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
-            pyinstaller --onefile setup.py --name=${ARTIFACT_NAME}
-          elif [[ "$RUNNER_OS" == "Linux" ]]; then
-            pyinstaller --onefile setup.py --name=${ARTIFACT_NAME}
-          else
-            pyinstaller --onefile setup.py --name=${ARTIFACT_NAME}.exe
-          fi
+          pyinstaller windows/tvhplayer.spec
         shell: bash
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v3
+      - name: Cache Chocolatey packages
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
         with:
-          name: ${{ matrix.artifact_name }}-${{ github.ref_name }}
-          path: dist/${{ matrix.artifact_name }}-${VERSION}*
+          path: ~\AppData\Local\Temp\chocolatey
+          key: ${{ runner.os }}-choco-innosetup-${{ hashFiles('.github/workflows/build.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-choco-innosetup-
+
+      - name: Create Windows installer
+        if: runner.os == 'Windows'
+        run: |
+          choco install innosetup -y
+          export VERSION="${{ env.VERSION }}"
+          iscc windows/tvhplayer.iss
+        shell: bash
+
+      - name: Build macOS app bundle
+        if: runner.os == 'macOS'
+        run: |
+          pyinstaller macos/tvhplayer.spec
+
+      - name: Cache Homebrew packages
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: ${{ runner.os }}-brew-create-dmg-${{ hashFiles('.github/workflows/build.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-brew-create-dmg-
+
+      - name: Create macOS DMG
+        if: runner.os == 'macOS'
+        run: |
+          brew install create-dmg
+          mkdir -p dist
+          create-dmg \
+            --volname "TVHplayer" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --icon-size 100 \
+            --icon "TVHplayer.app" 200 190 \
+            --hide-extension "TVHplayer.app" \
+            --app-drop-link 600 185 \
+            "dist/${{ matrix.artifact_name }}-${{ env.VERSION }}.dmg" \
+            "dist/TVHplayer.app" || true
+
+      - name: Build Linux .deb package
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential debhelper dh-python python3-all python3-setuptools
+          # Update debian/changelog with current version
+          DEBVERSION="${{ env.VERSION }}"
+          # Remove 'v' prefix if present (e.g., v1.0.0 -> 1.0.0)
+          DEBVERSION="${DEBVERSION#v}"
+          # If version doesn't start with digit (e.g., 'manual-build'), prefix with '0.0.0-'
+          if ! [[ "$DEBVERSION" =~ ^[0-9] ]]; then
+            DEBVERSION="0.0.0-${DEBVERSION}"
+          fi
+          sed -i "1s/([^)]*)/(${DEBVERSION})/" debian/changelog
+          dpkg-buildpackage -us -uc -b
+          mkdir -p dist
+          mv ../*.deb dist/${{ matrix.artifact_name }}-${{ env.VERSION }}.deb
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-${{ env.VERSION }}
+          path: |
+            dist/*.exe
+            dist/*.deb
+            dist/*.dmg
 
       - name: Upload to GitHub Releases
         uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         with:
           tag_name: ${{ github.ref_name }}
-          name: "Release ${{ github.ref_name }} (${VERSION})"
-          body: "Auto-generated release for version ${{ github.ref_name }} (${VERSION})"
-          files: dist/${{ matrix.artifact_name }}-${VERSION}*
+          name: "Release ${{ env.VERSION }}"
+          body: "Auto-generated release for version ${{ env.VERSION }}"
+          files: |
+            dist/*.exe
+            dist/*.deb
+            dist/*.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

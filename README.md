@@ -34,8 +34,29 @@ With TVHplayer you can:
 - TVHplayer is cross-platform - runs on linux, macOS and Windows
 
 ## Download
-- Head to [releases](https://github.com/mfat/tvhplayer/releases) section to download the app for your operating system (Linux, MacOS or Windows)
-- Linux users can also install the app from [Flathub](https://flathub.org/apps/io.github.mfat.tvhplayer)
+
+Choose the installer for your operating system from the [releases](https://github.com/mfat/tvhplayer/releases) page:
+
+**Windows:**
+- Download `tvhplayer-windows-{version}-setup.exe`
+- Run the installer - it will create Start Menu and Desktop shortcuts
+- Installs to `%LOCALAPPDATA%\Programs\TVHplayer\`
+
+**macOS:**
+- Intel Macs: Download `tvhplayer-macos-intel-{version}.dmg`
+- Apple Silicon (M1/M2/M3): Download `tvhplayer-macos-silicon-{version}.dmg`
+- Open the DMG and drag TVHplayer to Applications folder
+
+**Linux:**
+- **Debian/Ubuntu**: Download `tvhplayer-linux-{version}.deb` and install with:
+  ```bash
+  sudo dpkg -i tvhplayer-linux-{version}.deb
+  sudo apt-get install -f  # Install any missing dependencies
+  ```
+- **Flathub** (all distros): Install from [Flathub](https://flathub.org/apps/io.github.mfat.tvhplayer)
+  ```bash
+  flatpak install flathub io.github.mfat.tvhplayer
+  ```
 
 <a href='https://flathub.org/apps/io.github.mfat.tvhplayer'>
     <img width='240' alt='Get it on Flathub' src='https://flathub.org/api/badge?locale=en'/>
@@ -43,12 +64,16 @@ With TVHplayer you can:
 
 
 ## Requirements
-- Make sure both digest and plain authentication are enabled in your server
-- See requirements.txt for required python modules (python3 -m pip install python-vlc
-- python3 -m pip install python-vlc
-- VLC 
-- FFMPEG (used for local recording feature if you need it)
-  - On Windows follow [this guide](https://phoenixnap.com/kb/ffmpeg-windows) to add ffmpeg to windows PATH. You can also put ffmpeg.exe in the same directory as tvhplayer.
+
+**Server Configuration:**
+- Make sure both digest and plain authentication are enabled in your TVHeadend server
+
+**System Dependencies:**
+- **VLC media player** - Required for video playback (bundled in installers, or install separately)
+- **FFMPEG** (optional) - Only needed for local recording feature
+  - Windows: Follow [this guide](https://phoenixnap.com/kb/ffmpeg-windows) to add ffmpeg to PATH, or place `ffmpeg.exe` in the same directory as tvhplayer
+  - macOS: Install via Homebrew: `brew install ffmpeg`
+  - Linux: Install via package manager: `sudo apt install ffmpeg`
  
 ## Help and Support
 - Refer to the [User Guide](https://github.com/mfat/tvhplayer/wiki/User-Guide) for more information about using the app. 
@@ -67,10 +92,32 @@ To do this:
   `python3 tvhplayer/tvhplayer.py`
 
 ## Technical information
-- TVHplayer uses Tvheadend's HTTP REST API (no HTSP support yet)
-- For playback, it uses libvlc with hardware acceleration support
+
+**Architecture:**
+- Single-file Python application (~4000+ lines) in `tvhplayer/tvhplayer.py`
+- Built with PyQt6 for modern cross-platform GUI
+- Uses python-vlc bindings for video playback with hardware acceleration
+- TVHeadend HTTP REST API integration (no HTSP support)
+
+**Build System:**
+- Automated builds via GitHub Actions for all platforms
+- PyInstaller used for bundling with platform-specific `.spec` files
+- Windows: Inno Setup installer with modern UI, filtered Qt6 DLLs, --onedir mode
+  - Automatic config migration from v3.5 (`~/.tvhplayer.conf` → `%APPDATA%/TVHplayer/tvhplayer.conf`)
+  - Default recordings saved to Videos folder (`%USERPROFILE%/Videos`)
+- macOS: DMG installers for Intel (macos-14) and Apple Silicon (macos-15)
+- Linux: Debian package (.deb) with dynamic version handling
+- Parallel builds with `fail-fast: false` to ensure all platforms complete
+- Dynamic version management from Git workflow
+- Optimized with caching: pip dependencies, Homebrew, Chocolatey, APT packages
+
+**Performance & Optimization:**
 - Optimized HTTP requests with connection pooling and custom User-Agent
+- Asynchronous EPG updates with 20ms delays between channels (responsive UI)
+- Debounced UI state saving (500ms delay) to prevent excessive disk writes
 - Per-server icon caching in `~/.config/tvhplayer/channel_icons/` (Linux/macOS) or `%APPDATA%/tvhplayer/channel_icons/` (Windows)
+
+**Smart Features:**
 - Custom natural sorting algorithm for channel names:
   - Extracts base name and number from channel names
   - Sorts alphabetically by base name, then numerically

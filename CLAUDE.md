@@ -14,19 +14,115 @@ pip install -r requirements.txt
 python3 tvhplayer/tvhplayer.py
 ```
 
-### Build executable with PyInstaller
+### Build executables with PyInstaller
+
+Each platform has its own `.spec` file for consistent, reproducible builds:
+
+**Windows:**
 ```bash
-pyinstaller --name=tvhplayer --windowed tvhplayer/tvhplayer.py
+pyinstaller windows/tvhplayer.spec
 ```
+- Creates `dist/tvhplayer/` directory with all files (--onedir mode)
+- Inno Setup installer with modern UI creates final .exe installer
+- Filtered Qt6 DLLs to reduce size (excludes unused modules like QML, QtQuick, OpenGL SW renderer)
+- Bundles Qt platform plugins to prevent "Qt platform plugin could not be initialised" error
+- Uses system-installed VLC (not bundled) to save ~133 MB
+- Icon: `icons/tvhplayer.ico`
+
+**macOS:**
+```bash
+pyinstaller macos/tvhplayer.spec
+```
+- Creates `dist/TVHplayer.app` bundle
+- DMG installers for Intel (macos-14, x86_64) and Apple Silicon (macos-15, arm64)
+- Includes VLC plugins from `/Applications/VLC.app` or Homebrew installation
+- Icon: `icons/tvhplayer.png` (modern PNG format, .icns deprecated)
+
+**Linux:**
+Use the existing debian/ configuration:
+```bash
+dpkg-buildpackage -us -uc -b
+```
+- Creates `.deb` package with dynamic version handling
+- Requires: `build-essential`, `debhelper`, `dh-python`, `python3-all`, `python3-setuptools`
 
 ### Flatpak build
 Uses `io.github.mfat.tvhplayer.yml` manifest with dependencies defined in `pypi-dependencies.yaml`
+
+### GitHub Actions Build Pipeline
+
+Automated builds run via `.github/workflows/build.yml`:
+
+**Trigger:** Push tags or manual workflow_dispatch
+
+**Build Matrix:**
+- **Windows** (windows-latest): `.exe` installer via Inno Setup
+- **macOS Intel** (macos-14): `.dmg` for x86_64
+- **macOS Apple Silicon** (macos-15): `.dmg` for arm64
+- **Linux** (ubuntu-latest): `.deb` package
+
+**Key Configuration:**
+- Python 3.13 used across all platforms
+- `fail-fast: false` - all platforms build in parallel even if one fails
+- Parallel execution for faster builds
+- Dynamic version management from Git workflow
+- Automatic GitHub Release upload on tag push
+
+**Build Optimizations:**
+- **Caching enabled** for faster builds:
+  - Python pip dependencies (`cache: 'pip'`)
+  - Homebrew packages (macOS: `~/Library/Caches/Homebrew`)
+  - Chocolatey packages (Windows: `~\AppData\Local\Temp\chocolatey`)
+- Cache keys based on OS + workflow hash for consistency
+- Note: APT package caching is not used on Linux due to permission issues with `/var/cache/apt/archives`
+
+**Artifact Naming:**
+- `tvhplayer-windows-{version}-setup.exe`
+- `tvhplayer-macos-intel-{version}.dmg`
+- `tvhplayer-macos-silicon-{version}.dmg`
+- `tvhplayer-linux-{version}.deb`
+
+### Build Troubleshooting
+
+**Common Build Issues:**
+
+1. **Windows: "Qt platform plugin could not be initialised"**
+   - **Cause**: Qt platform plugins not bundled correctly
+   - **Fix**: Use `windows/tvhplayer.spec` with COLLECT mode (not onefile)
+   - The spec file ensures `qwindows.dll` is placed in `platforms/` subdirectory
+
+2. **Windows/macOS: "script 'tvhplayer/tvhplayer.py' not found"**
+   - **Cause**: Incorrect path resolution in `.spec` file (using `os.getcwd()` instead of `SPECPATH`)
+   - **Fix**: Use `SPECPATH` variable to locate repository root
+   - Example: `repo_root = os.path.dirname(SPECPATH)`
+   - Both `windows/tvhplayer.spec` and `macos/tvhplayer.spec` now use this correct pattern
+
+3. **Linux: "can't parse dependency" or "parsing package Depends field"**
+   - **Cause**: Missing commas or incorrect formatting in `debian/control`
+   - **Fix**: Ensure all dependencies are comma-separated on single lines
+   - **Required dependencies**: `python3-pyqt6`, `python3-vlc`, `python3-requests`, `python3-dateutil`, `vlc`
+
+4. **Linux: "Unmet build dependencies: build-essential"**
+   - **Cause**: Missing build tools for dpkg-buildpackage
+   - **Fix**: Install `build-essential` before running dpkg-buildpackage
+   - Full list: `build-essential`, `debhelper`, `dh-python`, `python3-all`, `python3-setuptools`
+
+5. **All platforms: "no files found matching 'icons/*'"**
+   - **Cause**: Incorrect path in `MANIFEST.in`
+   - **Fix**: Icons are in `icons/` not `tvhplayer/icons/`
+   - Correct: `include icons/*`
+
+**Debugging Tips:**
+- Check PyInstaller build logs for missing modules or plugins
+- Verify `.spec` file paths are relative to repository root, not spec file location
+- Test installers on clean systems without development dependencies
+- Use `fail-fast: false` in CI to get build logs from all platforms
 
 ## Architecture
 
 ### Main Application Structure
 
-**Single-file architecture**: The entire application is in `tvhplayer/tvhplayer.py` (~3300+ lines). This monolithic structure means:
+**Single-file architecture**: The entire application is in `tvhplayer/tvhplayer.py` (~4000+ lines). This monolithic structure means:
 - All UI, API logic, playback, and recording features are in one file
 - No separation between components - changes require careful review of the entire context
 - Main entry point is the `main()` function at the end of the file
@@ -133,8 +229,24 @@ Uses FFMPEG subprocess for local recording feature. Requires ffmpeg in PATH or s
 
 - Stored in JSON format at platform-specific paths
 - File: `tvhplayer.conf`
-- Contains: server list, window geometry, last selected server, UI state
+- Contains: server list, window geometry, last selected server, UI state, recording path
 - Server configs include: name, URL, username, password
+
+**Config Locations:**
+- macOS: `~/Library/Application Support/TVHplayer/tvhplayer.conf`
+- Windows: `%APPDATA%\TVHplayer\tvhplayer.conf`
+- Linux: `~/.config/tvhplayer/tvhplayer.conf`
+
+**Migration from v3.5 (Windows):**
+- Old location: `%USERPROFILE%\.tvhplayer.conf`
+- Automatically migrated to: `%APPDATA%\TVHplayer\tvhplayer.conf`
+- Backup created: `%APPDATA%\TVHplayer\.tvhplayer.conf.v35.backup`
+- Old file removed from home directory after migration
+- Migration runs once on first start of v4.0+
+
+**Default Recording Paths:**
+- Windows: `%USERPROFILE%\Videos`
+- macOS/Linux: `~` (Home directory)
 - **Configuration saving**:
   - Centralized via `save_config()` method - all config changes should use this
   - Server selection: Updated in `on_server_changed()` via `save_config()`

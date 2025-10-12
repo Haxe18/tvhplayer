@@ -1,2 +1,2 @@
 include tvhplayer/resources_rc.py
-include tvhplayer/icons/* 
+include icons/* 

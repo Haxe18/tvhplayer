@@ -1118,6 +1118,25 @@ class TVHeadendClient(QMainWindow):
         # Ensure config directory exists
         os.makedirs(self.config_dir, exist_ok=True)
 
+        # Migrate old config from v3.5 if present (Windows only)
+        if sys.platform == 'win32':
+            old_config = os.path.join(os.path.expanduser('~'), '.tvhplayer.conf')
+            new_config = os.path.join(self.config_dir, 'tvhplayer.conf')
+
+            if os.path.exists(old_config) and not os.path.exists(new_config):
+                try:
+                    # Copy old config to new location
+                    shutil.copy2(old_config, new_config)
+
+                    # Move old config to backup in new location
+                    backup_path = os.path.join(self.config_dir, '.tvhplayer.conf.v35.backup')
+                    shutil.move(old_config, backup_path)
+
+                    print(f"Migrated config from v3.5: {old_config} -> {new_config}")
+                    print(f"Backup saved: {backup_path}")
+                except (OSError, IOError) as e:
+                    print(f"Warning: Could not migrate old config: {e}")
+
         # Set config file path
         self.config_file = os.path.join(self.config_dir, 'tvhplayer.conf')
         self.config = self.load_config()
@@ -3028,10 +3047,12 @@ class TVHeadendClient(QMainWindow):
                     return json.load(f)
             else:
                 # Return default configuration
+                # Windows: Use Videos folder, others: Home directory
+                default_recording = str(Path.home() / 'Videos') if sys.platform == 'win32' else str(Path.home())
                 return {
                     'volume': 50,
                     'last_server': 0,
-                    'recording_path': str(Path.home()),
+                    'recording_path': default_recording,
                     'window_geometry': {
                         'x': 100,
                         'y': 100,
@@ -3045,10 +3066,12 @@ class TVHeadendClient(QMainWindow):
 
     def get_default_config(self):
         """Return default configuration"""
+        # Windows: Use Videos folder, others: Home directory
+        default_recording = str(Path.home() / 'Videos') if sys.platform == 'win32' else str(Path.home())
         return {
             'volume': 50,
             'last_server': 0,
-            'recording_path': str(Path.home()),
+            'recording_path': default_recording,
             'window_geometry': {
                 'x': 100,
                 'y': 100,
