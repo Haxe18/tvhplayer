@@ -24,6 +24,10 @@ With TVHplayer you can:
 - Record live TV locally on your computer
 - Monitor your server status, signal strength and DVR
 - Customize channel icon sizes (48px - 100px)
+- Dark Mode support with automatic system theme detection
+  - Three modes: Auto (follow system), Light Mode, Dark Mode
+  - Theme-aware UI components with optimized color schemes
+  - Windows-compatible QSS stylesheets for native widgets
 - Persistent UI state - your column widths, sort order, and window layout are remembered
   - Debounced saving prevents excessive disk writes during resizing operations
   - Server selection persists between sessions
@@ -94,10 +98,11 @@ To do this:
 ## Technical information
 
 **Architecture:**
-- Single-file Python application (~4000+ lines) in `tvhplayer/tvhplayer.py`
+- Single-file Python application (~4500+ lines) in `tvhplayer/tvhplayer.py`
 - Built with PyQt6 for modern cross-platform GUI
 - Uses python-vlc bindings for video playback with hardware acceleration
 - TVHeadend HTTP REST API integration (no HTSP support)
+- Dynamic theme system with QPalette + QSS stylesheets for cross-platform dark mode
 
 **Build System:**
 - Automated builds via GitHub Actions for all platforms

@@ -31,6 +31,485 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QComboBox,
                              QTableWidgetItem, QTabWidget, QTextEdit,
                              QToolButton, QVBoxLayout, QWidget)
 
+
+def create_dark_palette():
+    """Create a dark color palette for the application (lighter gray tones)"""
+    palette = QPalette()
+
+    # Base colors (lighter than before)
+    palette.setColor(QPalette.ColorRole.Window, QColor(66, 66, 66))  # #424242
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.Base, QColor(61, 61, 61))  # #3d3d3d
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(72, 72, 72))  # #484848
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(45, 45, 45))  # #2d2d2d
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.Text, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.Button, QColor(66, 66, 66))  # #424242
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
+    palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.Mid, QColor(85, 85, 85))  # #555555 for progress bar background
+
+    # Disabled state
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor(127, 127, 127))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(127, 127, 127))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(127, 127, 127))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Highlight, QColor(80, 80, 80))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.HighlightedText, QColor(127, 127, 127))
+
+    return palette
+
+
+def create_light_palette():
+    """Create a light color palette for the application"""
+    palette = QPalette()
+
+    # Base colors (Qt default light theme)
+    palette.setColor(QPalette.ColorRole.Window, QColor(240, 240, 240))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(0, 0, 0))
+    palette.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(245, 245, 245))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(255, 255, 220))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(0, 0, 0))
+    palette.setColor(QPalette.ColorRole.Text, QColor(0, 0, 0))
+    palette.setColor(QPalette.ColorRole.Button, QColor(240, 240, 240))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(0, 0, 0))
+    palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.Link, QColor(0, 0, 255))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(0, 120, 215))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+
+    # Disabled state
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor(120, 120, 120))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(120, 120, 120))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(120, 120, 120))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Highlight, QColor(200, 200, 200))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.HighlightedText, QColor(120, 120, 120))
+
+    return palette
+
+
+def is_system_dark_mode():
+    """Detect if the system is using dark mode using native APIs (no subprocess)"""
+
+    # Linux-specific detection using environment variables
+    if platform.system() == 'Linux':
+        # Check GTK theme (most reliable for GNOME-based systems)
+        gtk_theme = os.environ.get('GTK_THEME', '')
+        if gtk_theme:
+            if 'dark' in gtk_theme.lower():
+                print(f"Debug: GTK_THEME Dark Mode detected: {gtk_theme}")
+                return True
+            elif 'light' in gtk_theme.lower():
+                print(f"Debug: GTK_THEME Light Mode detected: {gtk_theme}")
+                return False
+
+        # Check Qt platform theme
+        qt_theme = os.environ.get('QT_QPA_PLATFORMTHEME', '')
+        if qt_theme:
+            print(f"Debug: QT_QPA_PLATFORMTHEME: {qt_theme}")
+            # Some Qt themes indicate dark mode in their name
+            if 'dark' in qt_theme.lower():
+                print(f"Debug: Qt Platform Theme Dark Mode detected")
+                return True
+
+        # Check desktop environment
+        desktop_env = os.environ.get('XDG_CURRENT_DESKTOP', '').lower()
+        if desktop_env:
+            print(f"Debug: Desktop Environment: {desktop_env}")
+
+        # Fall through to Qt palette detection for Linux
+        print("Debug: Environment variables inconclusive, checking Qt palette...")
+
+    # Qt-based detection (works for Windows, macOS, and as fallback for Linux)
+    try:
+        app = QApplication.instance()
+        if app is not None:
+            # Check if Qt is reading desktop settings
+            if hasattr(QApplication, 'desktopSettingsAware'):
+                aware = QApplication.desktopSettingsAware()
+                print(f"Debug: Qt desktopSettingsAware: {aware}")
+
+            # Try Qt 6.5+ colorScheme API first
+            style_hints = app.styleHints()
+            if hasattr(style_hints, 'colorScheme'):
+                color_scheme = style_hints.colorScheme()
+
+                # On Linux, colorScheme might be Unknown even when dark mode is active
+                if color_scheme == Qt.ColorScheme.Dark:
+                    print(f"Debug: Qt colorScheme: Dark Mode DETECTED")
+                    return True
+                elif color_scheme == Qt.ColorScheme.Light:
+                    print(f"Debug: Qt colorScheme: Light Mode DETECTED")
+                    return False
+                else:
+                    print(f"Debug: Qt colorScheme: Unknown ({color_scheme}), checking palette...")
+
+            # Improved palette analysis - check multiple color roles
+            palette = app.palette()
+
+            # Check multiple background colors for more reliable detection
+            window_color = palette.color(QPalette.ColorRole.Window)
+            base_color = palette.color(QPalette.ColorRole.Base)
+            button_color = palette.color(QPalette.ColorRole.Button)
+
+            # Check text colors for contrast analysis
+            window_text = palette.color(QPalette.ColorRole.WindowText)
+
+            # Calculate average lightness of background colors
+            avg_lightness = (window_color.lightness() + base_color.lightness() + button_color.lightness()) / 3
+
+            # Dark mode if average background lightness is less than 128
+            is_dark = avg_lightness < 128
+
+            print(f"Debug: Palette analysis - Window: {window_color.lightness()}, "
+                  f"Base: {base_color.lightness()}, Button: {button_color.lightness()}, "
+                  f"Avg: {avg_lightness:.1f}, Text: {window_text.lightness()}")
+            print(f"Debug: Palette-based detection: {'Dark' if is_dark else 'Light'} Mode")
+
+            return is_dark
+
+    except Exception as e:
+        print(f"Warning: Could not detect system dark mode: {e}")
+        traceback.print_exc()
+
+    # Default to light mode if detection fails
+    print("Debug: Defaulting to Light Mode (detection failed)")
+    return False
+
+
+def get_dark_mode_stylesheet():
+    """Return QSS stylesheet for dark mode (lighter gray tones)"""
+    return """
+        QTableWidget {
+            background-color: #3d3d3d;
+            alternate-background-color: #484848;
+            color: #ffffff;
+            gridline-color: #555555;
+        }
+
+        QHeaderView::section {
+            background-color: #424242;
+            color: #ffffff;
+            padding: 4px;
+            border: 1px solid #555555;
+            font-weight: bold;
+        }
+
+        QHeaderView::section:hover {
+            background-color: #4a4a4a;
+        }
+
+        QComboBox {
+            background-color: #424242;
+            color: #ffffff;
+            border: 1px solid #555555;
+            padding: 4px;
+        }
+
+        QComboBox:hover {
+            border: 1px solid #666666;
+        }
+
+        QComboBox::drop-down {
+            border: none;
+        }
+
+        QComboBox QAbstractItemView {
+            background-color: #424242;
+            color: #ffffff;
+            selection-background-color: #2a82da;
+            selection-color: #ffffff;
+        }
+
+        QMenuBar {
+            background-color: #424242;
+            color: #ffffff;
+        }
+
+        QMenuBar::item:selected {
+            background-color: #2a82da;
+        }
+
+        QMenu {
+            background-color: #424242;
+            color: #ffffff;
+            border: 1px solid #555555;
+        }
+
+        QMenu::item:selected {
+            background-color: #2a82da;
+        }
+
+        QToolBar {
+            background-color: #424242;
+            border: 1px solid #555555;
+        }
+
+        QPushButton {
+            background-color: #424242;
+            color: #ffffff;
+            border: 1px solid #555555;
+            padding: 4px 8px;
+        }
+
+        QPushButton:hover {
+            background-color: #4a4a4a;
+            border: 1px solid #666666;
+        }
+
+        QPushButton:pressed {
+            background-color: #2a82da;
+        }
+
+        QLineEdit {
+            background-color: #3d3d3d;
+            color: #ffffff;
+            border: 1px solid #555555;
+            padding: 2px;
+        }
+
+        QLineEdit:focus {
+            border: 1px solid #2a82da;
+        }
+
+        QTextEdit {
+            background-color: #3d3d3d;
+            color: #ffffff;
+            border: 1px solid #555555;
+        }
+
+        QLabel {
+            color: #ffffff;
+        }
+
+        QGroupBox {
+            color: #ffffff;
+            border: 1px solid #555555;
+            margin-top: 6px;
+            padding-top: 6px;
+        }
+
+        QGroupBox::title {
+            color: #ffffff;
+            subcontrol-origin: margin;
+            left: 8px;
+            padding: 0 3px;
+        }
+
+        QRadioButton {
+            color: #ffffff;
+        }
+
+        QCheckBox {
+            color: #ffffff;
+        }
+
+        QSpinBox {
+            background-color: #3d3d3d;
+            color: #ffffff;
+            border: 1px solid #555555;
+        }
+
+        QTabWidget::pane {
+            border: 1px solid #555555;
+        }
+
+        QTabBar::tab {
+            background-color: #424242;
+            color: #ffffff;
+            padding: 4px 8px;
+            border: 1px solid #555555;
+        }
+
+        QTabBar::tab:selected {
+            background-color: #2a82da;
+        }
+
+        QStatusBar {
+            background-color: #424242;
+            color: #ffffff;
+        }
+
+        QListWidget {
+            background-color: #3d3d3d;
+            color: #ffffff;
+            border: 1px solid #555555;
+        }
+
+        QListWidget::item:selected {
+            background-color: #2a82da;
+        }
+    """
+
+
+def get_light_mode_stylesheet():
+    """Return QSS stylesheet for light mode (ensures consistency)"""
+    return """
+        QTableWidget {
+            background-color: #ffffff;
+            alternate-background-color: #f5f5f5;
+            color: #000000;
+            gridline-color: #d0d0d0;
+        }
+
+        QHeaderView::section {
+            background-color: #f0f0f0;
+            color: #000000;
+            padding: 4px;
+            border: 1px solid #d0d0d0;
+            font-weight: bold;
+        }
+
+        QHeaderView::section:hover {
+            background-color: #e5e5e5;
+        }
+
+        QComboBox {
+            background-color: #f0f0f0;
+            color: #000000;
+            border: 1px solid #c0c0c0;
+            padding: 4px;
+        }
+
+        QComboBox:hover {
+            border: 1px solid #a0a0a0;
+        }
+
+        QComboBox QAbstractItemView {
+            background-color: #ffffff;
+            color: #000000;
+            selection-background-color: #0078d7;
+            selection-color: #ffffff;
+        }
+
+        QMenuBar {
+            background-color: #f0f0f0;
+            color: #000000;
+        }
+
+        QMenuBar::item:selected {
+            background-color: #0078d7;
+            color: #ffffff;
+        }
+
+        QMenu {
+            background-color: #ffffff;
+            color: #000000;
+            border: 1px solid #c0c0c0;
+        }
+
+        QMenu::item:selected {
+            background-color: #0078d7;
+            color: #ffffff;
+        }
+
+        QToolBar {
+            background-color: #f0f0f0;
+            border: 1px solid #d0d0d0;
+        }
+
+        QPushButton {
+            background-color: #f0f0f0;
+            color: #000000;
+            border: 1px solid #c0c0c0;
+            padding: 4px 8px;
+        }
+
+        QPushButton:hover {
+            background-color: #e5e5e5;
+            border: 1px solid #a0a0a0;
+        }
+
+        QPushButton:pressed {
+            background-color: #0078d7;
+            color: #ffffff;
+        }
+
+        QLineEdit {
+            background-color: #ffffff;
+            color: #000000;
+            border: 1px solid #c0c0c0;
+            padding: 2px;
+        }
+
+        QLineEdit:focus {
+            border: 1px solid #0078d7;
+        }
+
+        QTextEdit {
+            background-color: #ffffff;
+            color: #000000;
+            border: 1px solid #c0c0c0;
+        }
+
+        QLabel {
+            color: #000000;
+        }
+
+        QGroupBox {
+            color: #000000;
+            border: 1px solid #c0c0c0;
+            margin-top: 6px;
+            padding-top: 6px;
+        }
+
+        QGroupBox::title {
+            color: #000000;
+            subcontrol-origin: margin;
+            left: 8px;
+            padding: 0 3px;
+        }
+
+        QRadioButton {
+            color: #000000;
+        }
+
+        QCheckBox {
+            color: #000000;
+        }
+
+        QSpinBox {
+            background-color: #ffffff;
+            color: #000000;
+            border: 1px solid #c0c0c0;
+        }
+
+        QTabWidget::pane {
+            border: 1px solid #c0c0c0;
+        }
+
+        QTabBar::tab {
+            background-color: #f0f0f0;
+            color: #000000;
+            padding: 4px 8px;
+            border: 1px solid #c0c0c0;
+        }
+
+        QTabBar::tab:selected {
+            background-color: #0078d7;
+            color: #ffffff;
+        }
+
+        QStatusBar {
+            background-color: #f0f0f0;
+            color: #000000;
+        }
+
+        QListWidget {
+            background-color: #ffffff;
+            color: #000000;
+            border: 1px solid #c0c0c0;
+        }
+
+        QListWidget::item:selected {
+            background-color: #0078d7;
+            color: #ffffff;
+        }
+    """
+
 # Try to import psutil (optional dependency for system info logging)
 try:
     import psutil
@@ -945,11 +1424,11 @@ class ProgressBarDelegate(QStyledItemDelegate):
         bar_rect = option.rect.adjusted(padding, padding + text_height + text_bar_spacing, -padding, -padding)
         bar_rect.setHeight(bar_height)
 
-        # Draw time text with explicit color
+        # Draw time text with theme-aware color
         if option.state & QStyle.StateFlag.State_Selected:
             painter.setPen(option.palette.color(QPalette.ColorRole.HighlightedText))
         else:
-            painter.setPen(QColor(0, 0, 0))  # Black for better visibility
+            painter.setPen(option.palette.color(QPalette.ColorRole.Text))  # Adapts to theme
 
         font = QFont()
         font.setPointSize(9)  # Increased from 8
@@ -974,9 +1453,9 @@ class ProgressBarDelegate(QStyledItemDelegate):
 
         painter.drawText(title_rect, alignment, title)
 
-        # Draw progress bar background
+        # Draw progress bar background with theme-aware color
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(200, 200, 200))
+        painter.setBrush(option.palette.color(QPalette.ColorRole.Mid))
         painter.drawRect(bar_rect)
 
         # Draw progress bar fill
@@ -1001,6 +1480,71 @@ class ProgressBarDelegate(QStyledItemDelegate):
         """Return the size hint for the cell"""
         # Minimum height for text + progress bar
         return QSize(option.rect.width(), 35)
+
+class AppearanceDialog(QDialog):
+    """Dialog for appearance/theme settings"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_window = parent
+        self.setWindowTitle("Appearance Settings")
+        self.setModal(True)
+        self.resize(350, 200)
+        self.setup_ui()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+
+        # Appearance Settings Group
+        appearance_group = QGroupBox("Theme")
+        appearance_layout = QVBoxLayout()
+
+        # Theme mode radio buttons
+        self.theme_auto = QRadioButton("Auto (Follow System)")
+        self.theme_light = QRadioButton("Light Mode")
+        self.theme_dark = QRadioButton("Dark Mode")
+
+        appearance_layout.addWidget(self.theme_auto)
+        appearance_layout.addWidget(self.theme_light)
+        appearance_layout.addWidget(self.theme_dark)
+
+        appearance_group.setLayout(appearance_layout)
+        layout.addWidget(appearance_group)
+
+        # Load current settings
+        self.load_current_settings()
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        ok_btn = QPushButton("OK")
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addStretch()
+        button_layout.addWidget(ok_btn)
+        button_layout.addWidget(cancel_btn)
+        layout.addLayout(button_layout)
+
+    def load_current_settings(self):
+        if not self.parent_window:
+            return
+
+        # Load theme mode
+        theme_mode = self.parent_window.config.get('theme_mode', 'auto')
+        if theme_mode == 'light':
+            self.theme_light.setChecked(True)
+        elif theme_mode == 'dark':
+            self.theme_dark.setChecked(True)
+        else:  # 'auto' or default
+            self.theme_auto.setChecked(True)
+
+    def get_theme_mode(self):
+        """Return selected theme mode: 'auto', 'light', or 'dark'"""
+        if self.theme_light.isChecked():
+            return 'light'
+        elif self.theme_dark.isChecked():
+            return 'dark'
+        else:
+            return 'auto'
 
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
@@ -1073,9 +1617,10 @@ class SettingsDialog(QDialog):
         if not self.parent_window:
             return
 
+        # Load icon size
         current_size = self.parent_window.config.get('icon_size', 48)
 
-        # Check which preset matches (only icon size)
+        # Check which preset matches
         if current_size == 48:
             self.preset_small.setChecked(True)
         elif current_size == 64:
@@ -1089,7 +1634,7 @@ class SettingsDialog(QDialog):
             self.custom_icon_size.setValue(current_size)
 
     def get_settings(self):
-        """Return selected icon size only"""
+        """Return selected icon size"""
         if self.preset_small.isChecked():
             return 48
         elif self.preset_medium.isChecked():
@@ -1255,6 +1800,9 @@ class TVHeadendClient(QMainWindow):
         # Then setup UI
         self.setup_ui()
 
+        # Apply theme from config
+        self.apply_theme()
+
         # Update to use config for last server
         self.server_combo.setCurrentIndex(self.config.get('last_server', 0))
 
@@ -1382,6 +1930,11 @@ class TVHeadendClient(QMainWindow):
         fullscreen_action.setShortcut("F")
         fullscreen_action.triggered.connect(self.toggle_fullscreen)
         view_menu.addAction(fullscreen_action)
+
+        # Add Appearance action to Settings menu
+        appearance_action = QAction("Appearance", self)
+        appearance_action.triggered.connect(self.show_appearance)
+        settings_menu.addAction(appearance_action)
 
         # Add Channel Icons action to Settings menu
         channel_icons_action = QAction("Channel Icons", self)
@@ -2401,15 +2954,29 @@ class TVHeadendClient(QMainWindow):
             self.mute_btn.setToolTip("Mute")
             print("Debug: Audio unmuted")
 
+    def show_appearance(self):
+        """Show appearance/theme settings dialog"""
+        dialog = AppearanceDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # Get new theme mode
+            theme_mode = dialog.get_theme_mode()
+
+            # Apply theme if changed
+            if theme_mode != self.config.get('theme_mode', 'auto'):
+                self.config['theme_mode'] = theme_mode
+                self.save_config()
+                self.apply_theme()
+
     def show_settings(self):
-        """Show settings dialog"""
+        """Show channel icon settings dialog"""
         dialog = SettingsDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            # Get new settings (only icon size now)
+            # Get new icon size
             icon_size = dialog.get_settings()
 
-            # Apply new settings (will save config internally)
-            self.apply_icon_settings(icon_size)
+            # Apply icon settings if changed
+            if icon_size != self.config.get('icon_size', 48):
+                self.apply_icon_settings(icon_size)
 
     def apply_icon_settings(self, icon_size):
         """Apply new icon size settings"""
@@ -2443,6 +3010,38 @@ class TVHeadendClient(QMainWindow):
                         self.load_channel_icon(row, 1, icon_url, server, from_cache_only=False)
 
         self.statusbar.showMessage(f"Icon settings updated ({icon_size}px)")
+
+    def apply_theme(self):
+        """Apply the theme based on current config settings"""
+        theme_mode = self.config.get('theme_mode', 'auto')
+
+        # Determine which theme to apply
+        use_dark_mode = False
+        if theme_mode == 'dark':
+            use_dark_mode = True
+        elif theme_mode == 'light':
+            use_dark_mode = False
+        else:  # 'auto' - follow system
+            use_dark_mode = is_system_dark_mode()
+
+        # Apply the appropriate palette and stylesheet
+        app = QApplication.instance()
+        if app is not None:
+            if use_dark_mode:
+                app.setPalette(create_dark_palette())
+                app.setStyleSheet(get_dark_mode_stylesheet())
+                print("Debug: Dark mode applied (palette + QSS)")
+            else:
+                app.setPalette(create_light_palette())
+                app.setStyleSheet(get_light_mode_stylesheet())
+                print("Debug: Light mode applied (palette + QSS)")
+
+            # Update status message
+            theme_name = "Dark Mode" if use_dark_mode else "Light Mode"
+            if theme_mode == 'auto':
+                self.statusbar.showMessage(f"Theme: {theme_name} (Auto)")
+            else:
+                self.statusbar.showMessage(f"Theme: {theme_name}")
 
     def clear_icon_cache(self):
         """Clear all cached channel icons for all servers"""

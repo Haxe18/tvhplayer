@@ -122,7 +122,7 @@ Automated builds run via `.github/workflows/build.yml`:
 
 ### Main Application Structure
 
-**Single-file architecture**: The entire application is in `tvhplayer/tvhplayer.py` (~4000+ lines). This monolithic structure means:
+**Single-file architecture**: The entire application is in `tvhplayer/tvhplayer.py` (~4500+ lines). This monolithic structure means:
 - All UI, API logic, playback, and recording features are in one file
 - No separation between components - changes require careful review of the entire context
 - Main entry point is the `main()` function at the end of the file
@@ -145,12 +145,18 @@ Automated builds run via `.github/workflows/build.yml`:
   - Color-coded progress: Green (0-25%), Blue (25-75%), Orange (75-100%)
   - Auto-refreshes every 60 seconds for live progress updates
 
-- **`SettingsDialog(QDialog)`** (line ~978): User preferences dialog
+- **`AppearanceDialog(QDialog)`** (line ~1420): Theme/appearance settings dialog
+  - Theme mode options: Auto (Follow System), Light Mode, Dark Mode
+  - Accessible via Settings → Appearance menu
+  - Returns selected theme via `get_theme_mode()`: 'auto', 'light', or 'dark'
+
+- **`SettingsDialog(QDialog)`** (line ~1485): Channel icon preferences dialog
   - Icon size presets: Small (48px), Medium (64px), Large (80px), Extra Large (100px), Custom
   - Settings persist to config file
   - Accessible via Settings → Channel Icons menu
+  - Returns icon size as integer (not dict)
 
-- **`TVHeadendClient(QMainWindow)`** (line ~1088): Main application window and controller
+- **`TVHeadendClient(QMainWindow)`** (line ~1585): Main application window and controller
   - Handles all UI, server connections, playback, and recordings
   - Initializes VLC with hardware acceleration support
   - Platform-specific configuration paths (macOS: ~/Library/Application Support, Windows: %APPDATA%, Linux: ~/.config)
@@ -172,6 +178,49 @@ Automated builds run via `.github/workflows/build.yml`:
     - HTML-formatted tooltips with word-wrap and max-width (400px) for better readability
     - Prevents long descriptions from spanning entire screen
   - `RecordingStatusDialog`: Monitor active recordings
+
+### Dark Mode & Theme System
+
+TVHplayer includes a comprehensive dark mode system with automatic OS detection and manual override:
+
+**Theme Functions** (lines 35-446):
+- **`create_dark_palette()`**: Creates QPalette with lighter gray tones
+  - Window/Button: #424242, Base: #3d3d3d, AlternateBase: #484848
+  - Mid: #555555 (used for progress bar backgrounds)
+  - Includes disabled state colors for accessibility
+- **`create_light_palette()`**: Creates QPalette for light mode with standard Qt colors
+- **`is_system_dark_mode()`**: Detects OS dark mode preference using native APIs (no subprocess)
+  - **Linux**: Checks environment variables (`GTK_THEME`, `QT_QPA_PLATFORMTHEME`, `XDG_CURRENT_DESKTOP`)
+  - **All platforms**: Uses Qt 6.5+ `styleHints().colorScheme()` when available
+  - **Fallback**: Improved palette analysis - averages lightness of Window, Base, and Button colors (<128 = dark)
+  - **No external commands**: Uses only `os.environ` and Qt APIs for better performance and reliability
+- **`get_dark_mode_stylesheet()`**: Comprehensive QSS stylesheet for dark mode
+  - Fixes Windows native widgets (QHeaderView, QComboBox, labels)
+  - Styles all UI components: tables, menus, buttons, inputs, tabs
+  - Ensures readability on Windows where QPalette alone is insufficient
+- **`get_light_mode_stylesheet()`**: QSS stylesheet for light mode consistency
+
+**Theme Application** (`TVHeadendClient.apply_theme()`, line ~2950):
+- Reads `theme_mode` from config: 'auto' (default), 'light', or 'dark'
+- For 'auto': calls `is_system_dark_mode()` to detect OS preference
+- Applies **both** QPalette and QSS stylesheet (critical for Windows compatibility)
+- Updates status bar with current theme
+
+**Theme-Aware Components**:
+- **ProgressBarDelegate**: EPG text and progress bar backgrounds use palette colors
+  - Text: `option.palette.color(QPalette.ColorRole.Text)` (was hardcoded black)
+  - Bar background: `option.palette.color(QPalette.ColorRole.Mid)` (was hardcoded gray)
+  - Automatically adapts to light/dark themes without manual intervention
+
+**Config Persistence**:
+- `theme_mode` key stores user preference ('auto'/'light'/'dark')
+- Applied automatically on application startup (after UI setup)
+- Changed via Settings → Appearance dialog
+
+**Why Both QPalette + QSS**:
+- QPalette: Base colors for Qt widgets, cross-platform compatibility
+- QSS: Necessary for Windows native widgets (headers, combo boxes) that ignore QPalette
+- QSS also provides hover states and fine-grained control unavailable in QPalette
 
 ### TVHeadend API Integration
 
@@ -253,6 +302,7 @@ Uses FFMPEG subprocess for local recording feature. Requires ffmpeg in PATH or s
   - Avoids redundant saves by not re-reading UI state in `save_config()`
   - Config dict is "single source of truth", not the UI controls
 - UI state persistence:
+  - `theme_mode`: Theme preference ('auto', 'light', 'dark') - default: 'auto'
   - `icon_size`: Channel icon size (48-100px)
   - `channel_column_width`: Width of channel name column (default: 80px)
   - `current_program_width`: Width of current program column (default: 300px)
