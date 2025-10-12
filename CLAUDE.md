@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-TVHplayer is a cross-platform desktop client for TVHeadend servers, built with PyQt5 and python-vlc. It allows users to watch live TV, browse EPG, schedule recordings, and record locally to their computer.
+TVHplayer is a cross-platform desktop client for TVHeadend servers, built with PyQt6 and python-vlc. It allows users to watch live TV, browse EPG, schedule recordings, and record locally to their computer.
 
 ## Running and Development
 
@@ -277,7 +277,7 @@ The main channel list (`QTableWidget`) has **5 columns**:
 ## Dependencies
 
 Core runtime dependencies:
-- PyQt5 >= 5.15.0
+- PyQt6 >= 6.0.0
 - python-vlc >= 3.0.12122
 - requests >= 2.28.0
 - python-dateutil >= 2.8.2

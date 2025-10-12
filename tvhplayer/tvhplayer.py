@@ -1,31 +1,35 @@
-from datetime import datetime, timedelta
-import sys
-from tkinter.filedialog import FileDialog
-import vlc
-from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QToolBar, QComboBox, QAction, QSplitter, QFrame,
-    QListWidget, QDialog, QFormLayout, QLineEdit,
-    QDialogButtonBox, QMessageBox, QApplication,
-    QPushButton, QLabel, QSlider, QStatusBar, QGridLayout, QMenuBar, QRadioButton, QSpinBox, QGraphicsOpacityEffect, QFileDialog,
-    QMenu, QListWidgetItem, QTableWidget, QTableWidgetItem, QHeaderView, QTabWidget, QTextEdit, QSizePolicy, QToolButton, QShortcut, QCheckBox, QGroupBox  # Added QGroupBox here
-)
-from PyQt5.QtCore import Qt, QSize, QTimer, QPropertyAnimation, QEasingCurve, QAbstractAnimation, QRect, QCoreApplication
-from PyQt5.QtGui import QIcon, QPainter, QColor, QKeySequence, QPalette, QPixmap, QFont
-from PyQt5.QtWidgets import QStyledItemDelegate, QStyle
-import json
-import re
-import requests
-import time
-import subprocess
-import os
-import traceback
-from pathlib import Path
-import logging
-import platform
-import shutil
-import webbrowser
 import base64
+import json
+import logging
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import time
+import traceback
+import webbrowser
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import requests
+import vlc
+from PyQt6.QtCore import (QEasingCurve, QEvent, QPropertyAnimation, QSize, Qt,
+                          QTimer)
+from PyQt6.QtGui import (QAction, QColor, QFont, QIcon, QKeySequence, QPalette,
+                         QPixmap, QShortcut)
+from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QComboBox,
+                             QDialog, QDialogButtonBox, QFileDialog,
+                             QFormLayout, QFrame, QGraphicsOpacityEffect,
+                             QGroupBox, QHBoxLayout, QHeaderView, QLabel,
+                             QLineEdit, QListWidget, QListWidgetItem,
+                             QMainWindow, QMenu, QMessageBox, QPushButton,
+                             QRadioButton, QSizePolicy, QSlider, QSpinBox,
+                             QSplitter, QStatusBar, QStyle,
+                             QStyledItemDelegate, QTableWidget,
+                             QTableWidgetItem, QTabWidget, QTextEdit,
+                             QToolButton, QVBoxLayout, QWidget)
 
 # Try to import psutil (optional dependency for system info logging)
 try:
@@ -33,12 +37,6 @@ try:
     PSUTIL_AVAILABLE = True
 except ImportError:
     PSUTIL_AVAILABLE = False
-
-# Flexible import for resources_rc (package vs direct import)
-try:
-    from . import resources_rc  # Try package import first
-except ImportError:
-    import resources_rc  # Fall back to direct import when running from source
 
 # User-Agent for API requests
 USER_AGENT = "TVHplayer/4.0 (https://github.com/mfat/tvhplayer)"
@@ -90,38 +88,38 @@ class Logger:
         psutil_module = psutil if PSUTIL_AVAILABLE else None
 
         self.logger.info("=== System Information ===")
-        self.logger.info(f"OS: {platform.platform()}")
-        self.logger.info(f"Python: {sys.version}")
-        self.logger.info(f"CPU: {platform.processor()}")
+        self.logger.info("OS: %s", platform.platform())
+        self.logger.info("Python: %s", sys.version)
+        self.logger.info("CPU: %s", platform.processor())
 
-        if psutil_module:
-            self.logger.info(f"Memory: {psutil_module.virtual_memory().total / (1024**3):.2f} GB")
-            self.logger.info(f"Disk Space: {psutil_module.disk_usage('/').free / (1024**3):.2f} GB free")
+        if psutil_module is not None:
+            self.logger.info("Memory: %.2f GB", psutil_module.virtual_memory().total / (1024**3))
+            self.logger.info("Disk Space: %.2f GB free", psutil_module.disk_usage('/').free / (1024**3))
 
         # Log environment variables
         self.logger.info("=== Environment Variables ===")
         for key, value in os.environ.items():
             if any(sensitive in key.lower() for sensitive in ['password', 'secret', 'key', 'token']):
-                self.logger.info(f"{key}=<REDACTED>")
+                self.logger.info("%s=<REDACTED>", key)
             else:
-                self.logger.info(f"{key}={value}")
+                self.logger.info("%s=%s", key, value)
 
         self.logger.info("=== Dependencies ===")
         try:
-            from PyQt5 import QtCore
-            self.logger.info(f"PyQt5 version: {QtCore.QT_VERSION_STR}")
+            from PyQt6 import QtCore
+            self.logger.info("PyQt6 version: %s", QtCore.QT_VERSION_STR)
         except (ImportError, AttributeError):
-            self.logger.error("PyQt5 not found")
+            self.logger.error("PyQt6 not found")
 
         try:
-            import vlc
-            self.logger.info(f"python-vlc version: {vlc.__version__}")
+            import vlc as vlc_module  # pylint: disable=reimported
+            self.logger.info("python-vlc version: %s", vlc_module.__version__)
         except ImportError:
             self.logger.error("python-vlc not found")
 
         try:
-            import requests
-            self.logger.info(f"requests version: {requests.__version__}")
+            import requests as requests_module  # pylint: disable=reimported
+            self.logger.info("requests version: %s", requests_module.__version__)
         except ImportError:
             self.logger.error("requests not found")
 
@@ -170,21 +168,21 @@ class DVRStatusDialog(QDialog):
         self.upcoming_table = QTableWidget()
         self.upcoming_table.setColumnCount(5)  # Added one more column for status
         self.upcoming_table.setHorizontalHeaderLabels(['Channel', 'Title', 'Start Time', 'Duration', 'Status'])
-        self.upcoming_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.upcoming_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.tabs.addTab(self.upcoming_table, "Upcoming/Current")  # Changed tab title
 
         # Finished recordings tab
         self.finished_table = QTableWidget()
         self.finished_table.setColumnCount(4)
         self.finished_table.setHorizontalHeaderLabels(['Channel', 'Title', 'Start Time', 'Duration'])
-        self.finished_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.finished_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.tabs.addTab(self.finished_table, "Finished")
 
         # Failed recordings tab
         self.failed_table = QTableWidget()
         self.failed_table.setColumnCount(4)
         self.failed_table.setHorizontalHeaderLabels(['Channel', 'Title', 'Start Time', 'Error'])
-        self.failed_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.failed_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.tabs.addTab(self.failed_table, "Failed")
 
         # Close button
@@ -260,13 +258,13 @@ class DVRStatusDialog(QDialog):
                     self.upcoming_table.setItem(i, 3, QTableWidgetItem(str(duration)))
 
                     # Add status column
-                    status = "Recording" if is_recording else entry.get('sched_status', 'scheduled').capitalize()
+                    status = "Recording" if is_recording else "Scheduled"
                     self.upcoming_table.setItem(i, 4, QTableWidgetItem(status))
 
                     # Highlight currently recording entries
                     if is_recording:
                         for col in range(5):  # Update range to include new column
-                            self.upcoming_table.item(i, col).setBackground(Qt.green)
+                            self.upcoming_table.item(i, col).setBackground(QColor('green'))
 
                 # Sort finished recordings by start time (most recent first)
                 finished.sort(key=lambda x: x[2], reverse=True)
@@ -289,7 +287,7 @@ class DVRStatusDialog(QDialog):
                     self.failed_table.setItem(i, 3, QTableWidgetItem(error))
                     # Highlight failed entries in red
                     for col in range(4):
-                        self.failed_table.item(i, col).setBackground(Qt.red)
+                        self.failed_table.item(i, col).setBackground(QColor('red'))
 
             else:
                 print(f"Debug: Failed to fetch DVR entries. Status code: {response.status_code}")
@@ -351,7 +349,7 @@ class RecordingDurationDialog(QDialog):
 
         # Buttons
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -413,7 +411,7 @@ class ServerDialog(QDialog):
     def add_server(self):
         print("Debug: Opening add server dialog")
         dialog = ServerConfigDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             server = dialog.get_server_config()
             print(f"Debug: Adding new server: {server['name']}")
             self.servers.append(server)
@@ -425,7 +423,7 @@ class ServerDialog(QDialog):
             print(f"Debug: Editing server at index {current_row}")
             dialog = ServerConfigDialog(self)
             dialog.set_server_config(self.servers[current_row])
-            if dialog.exec_() == QDialog.Accepted:
+            if dialog.exec() == QDialog.DialogCode.Accepted:
                 self.servers[current_row] = dialog.get_server_config()
                 print(f"Debug: Updated server: {self.servers[current_row]['name']}")
                 self.server_list.item(current_row).setText(self.servers[current_row]['name'])
@@ -454,12 +452,12 @@ class ServerConfigDialog(QDialog):
         self.url_input = QLineEdit()
         self.username_input = QLineEdit()
         self.password_input = QLineEdit()
-        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
 
         # Style placeholder text
         placeholder_color = QColor(100, 100, 100)  # Dark gray color
         palette = self.palette()
-        palette.setColor(QPalette.PlaceholderText, placeholder_color)
+        palette.setColor(QPalette.ColorRole.PlaceholderText, placeholder_color)
         self.setPalette(palette)
 
         # Apply placeholder text
@@ -473,7 +471,7 @@ class ServerConfigDialog(QDialog):
         self.password_input.setPlaceholderText("Optional")
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -571,7 +569,7 @@ class ConnectionErrorDialog(QDialog):
         # Error icon and message
         message_layout = QHBoxLayout()
         icon_label = QLabel()
-        icon_label.setPixmap(QMessageBox.standardIcon(QMessageBox.Critical))
+        icon_label.setPixmap(QMessageBox.standardIcon(QMessageBox.Icon.Critical))
         message_layout.addWidget(icon_label)
 
         error_text = QLabel(
@@ -629,7 +627,7 @@ class ServerStatusDialog(QDialog):
             'Duration',
             'Type/Status'
         ])
-        self.subscriptions_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.subscriptions_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.tabs.addTab(self.subscriptions_table, "Active Streams")
 
         # Signal Status tab (new)
@@ -642,7 +640,7 @@ class ServerStatusDialog(QDialog):
             'Stream',
             'Weight'
         ])
-        self.signal_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.signal_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.tabs.addTab(self.signal_table, "Signal Status")
 
         # Server info tab
@@ -662,7 +660,7 @@ class ServerStatusDialog(QDialog):
                 auth = (self.server.get('username', ''), self.server.get('password', ''))
 
             # 1. Update Server Info Tab
-            server_info = f"Server Information:\n\n"
+            server_info = "Server Information:\n\n"
             server_info += f"Name: {self.server.get('name', 'Unknown')}\n"
             server_info += f"URL: {self.server.get('url', 'Unknown')}\n"
 
@@ -680,7 +678,7 @@ class ServerStatusDialog(QDialog):
                         server_info += "\nCapabilities:\n"
                         for cap in server_data['capabilities']:
                             server_info += f"- {cap}\n"
-            except Exception as e:
+            except (requests.RequestException, json.JSONDecodeError, KeyError) as e:
                 server_info += f"\nError fetching server info: {str(e)}\n"
 
             self.info_text.setText(server_info)
@@ -696,18 +694,18 @@ class ServerStatusDialog(QDialog):
                     # Set up table with double the rows (signal and SNR on separate rows)
                     self.signal_table.setRowCount(len(inputs) * 2)
 
-                    for i, input in enumerate(inputs):
+                    for i, input_data in enumerate(inputs):
                         # Base row for this input (multiply by 2 since we're using 2 rows per input)
                         base_row = i * 2
 
                         # Input name spans both rows
-                        input_item = QTableWidgetItem(str(input.get('input', 'Unknown')))
+                        input_item = QTableWidgetItem(str(input_data.get('input', 'Unknown')))
                         self.signal_table.setItem(base_row, 0, input_item)
                         self.signal_table.setSpan(base_row, 0, 2, 1)  # Span 2 rows
 
                         # Signal row
-                        signal = input.get('signal')
-                        signal_scale = input.get('signal_scale', 0)
+                        signal = input_data.get('signal')
+                        signal_scale = input_data.get('signal_scale', 0)
                         if signal is not None and signal_scale > 0:
                             if signal_scale == 1:  # Relative (65535 = 100%)
                                 signal_value = f"{(signal * 100 / 65535):.1f}%"
@@ -723,8 +721,8 @@ class ServerStatusDialog(QDialog):
                         self.signal_table.setItem(base_row, 2, QTableWidgetItem("Signal"))
 
                         # SNR row
-                        snr = input.get('snr')
-                        snr_scale = input.get('snr_scale', 0)
+                        snr = input_data.get('snr')
+                        snr_scale = input_data.get('snr_scale', 0)
                         if snr is not None and snr_scale > 0:
                             if snr_scale == 1:  # Relative (65535 = 100%)
                                 snr_value = f"{(snr * 100 / 65535):.1f}%"
@@ -740,15 +738,15 @@ class ServerStatusDialog(QDialog):
                         self.signal_table.setItem(base_row + 1, 2, QTableWidgetItem("SNR"))
 
                         # Stream and Weight info (spans both rows)
-                        self.signal_table.setItem(base_row, 3, QTableWidgetItem(str(input.get('stream', 'N/A'))))
-                        self.signal_table.setItem(base_row, 4, QTableWidgetItem(str(input.get('weight', 'N/A'))))
+                        self.signal_table.setItem(base_row, 3, QTableWidgetItem(str(input_data.get('stream', 'N/A'))))
+                        self.signal_table.setItem(base_row, 4, QTableWidgetItem(str(input_data.get('weight', 'N/A'))))
                         self.signal_table.setSpan(base_row, 3, 2, 1)  # Span 2 rows for stream
                         self.signal_table.setSpan(base_row, 4, 2, 1)  # Span 2 rows for weight
 
                         # Color coding for signal and SNR
                         self.color_code_cell(signal_item, signal, signal_scale, 'signal')
                         self.color_code_cell(snr_item, snr, snr_scale, 'snr')
-            except Exception as e:
+            except (requests.RequestException, json.JSONDecodeError, KeyError) as e:
                 print(f"Debug: Error updating signal status: {str(e)}")
 
             # 3. Update Active Streams Tab
@@ -820,32 +818,32 @@ class ServerStatusDialog(QDialog):
 
                         row += 1
 
-            except Exception as e:
+            except (requests.RequestException, json.JSONDecodeError, KeyError) as e:
                 print(f"Debug: Error fetching connections/subscriptions: {str(e)}")
 
-        except Exception as e:
+        except (requests.RequestException, json.JSONDecodeError, KeyError) as e:
             print(f"Debug: Error in update_status: {str(e)}")
             print(f"Debug: Traceback: {traceback.format_exc()}")
 
-    def color_code_cell(self, item, value, scale, type='signal'):
+    def color_code_cell(self, item, value, scale, value_type='signal'):
         """Helper method to color code signal and SNR values"""
         if value is not None and scale > 0:
             if scale == 1:
                 quality = (value * 100 / 65535)
             else:  # scale == 2
-                if type == 'signal':
+                if value_type == 'signal':
                     quality = min(100, max(0, (value / 1000 + 15) * 6.67))
                 else:  # SNR
                     quality = min(100, max(0, (value / 1000 - 10) * 10))
 
             if quality >= 80:
-                item.setBackground(Qt.green)
+                item.setBackground(QColor('green'))
             elif quality >= 60:
-                item.setBackground(Qt.yellow)
+                item.setBackground(QColor('yellow'))
             elif quality >= 40:
-                item.setBackground(Qt.darkYellow)
+                item.setBackground(QColor('darkyellow'))
             else:
-                item.setBackground(Qt.red)
+                item.setBackground(QColor('red'))
 
     def closeEvent(self, event):
         self.update_timer.stop()
@@ -885,13 +883,10 @@ class NaturalSortTableWidgetItem(QTableWidgetItem):
 class ProgressBarDelegate(QStyledItemDelegate):
     """Custom delegate to draw progress bar in EPG cells"""
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
     def paint(self, painter, option, index):
         """Custom paint method to draw progress bar"""
         # Get data from the cell
-        data = index.data(Qt.UserRole)
+        data = index.data(Qt.ItemDataRole.UserRole)
 
         if not data or not isinstance(data, dict):
             # No progress data, use default painting
@@ -926,7 +921,7 @@ class ProgressBarDelegate(QStyledItemDelegate):
         painter.save()
 
         # Fill selection background if selected
-        if option.state & QStyle.State_Selected:
+        if option.state & QStyle.StateFlag.State_Selected:
             painter.fillRect(option.rect, option.palette.highlight())
         else:
             painter.fillRect(option.rect, option.palette.base())
@@ -951,15 +946,15 @@ class ProgressBarDelegate(QStyledItemDelegate):
         bar_rect.setHeight(bar_height)
 
         # Draw time text with explicit color
-        if option.state & QStyle.State_Selected:
-            painter.setPen(option.palette.color(QPalette.HighlightedText))
+        if option.state & QStyle.StateFlag.State_Selected:
+            painter.setPen(option.palette.color(QPalette.ColorRole.HighlightedText))
         else:
             painter.setPen(QColor(0, 0, 0))  # Black for better visibility
 
         font = QFont()
         font.setPointSize(9)  # Increased from 8
         painter.setFont(font)
-        painter.drawText(time_rect, Qt.AlignLeft | Qt.AlignVCenter, time_text)
+        painter.drawText(time_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, time_text)
 
         # Draw title text with same size as time and word wrapping
         font.setPointSize(9)  # Same size as time text
@@ -973,14 +968,14 @@ class ProgressBarDelegate(QStyledItemDelegate):
 
         # Use AlignTop if text wraps (multi-line), AlignVCenter if single line
         if text_width > available_width:
-            alignment = Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap
+            alignment = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap
         else:
-            alignment = Qt.AlignLeft | Qt.AlignVCenter
+            alignment = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
 
         painter.drawText(title_rect, alignment, title)
 
         # Draw progress bar background
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(200, 200, 200))
         painter.drawRect(bar_rect)
 
@@ -1002,7 +997,7 @@ class ProgressBarDelegate(QStyledItemDelegate):
 
         painter.restore()
 
-    def sizeHint(self, option, index):
+    def sizeHint(self, option, _index):
         """Return the size hint for the cell"""
         # Minimum height for text + progress bar
         return QSize(option.rect.width(), 35)
@@ -1194,12 +1189,27 @@ class TVHeadendClient(QMainWindow):
 
                 print(f"Debug: VLC plugin path set to: {plugin_path}")
 
-            # Initialize VLC with hardware acceleration parameters
+            # Initialize VLC with hardware acceleration parameters and robustness options
             vlc_args = [
                 # Enable hardware decoding
                 '--avcodec-hw=any',  # Try any hardware acceleration method
+
+                # Caching and buffering
                 '--file-caching=1000',  # Increase file caching for smoother playback
                 '--network-caching=1000',  # Increase network caching for streaming
+                '--live-caching=1000',  # Live stream caching
+
+                # Audio handling
+                '--audio-resampler=soxr',  # Better audio resampler for problematic streams
+
+                # Video decoder robustness
+                '--avcodec-skiploopfilter=4',  # Skip loop filter on errors (nonkey frames)
+                '--avcodec-skip-frame=0',  # Don't skip frames
+                '--avcodec-skip-idct=0',  # Don't skip IDCT
+                '--avcodec-error-resilience=1',  # Enable error resilience
+                '--avcodec-workaround-bugs=1',  # Enable bug workarounds
+
+                # UI options
                 '--no-video-title-show',  # Don't show the video title
                 '--no-snapshot-preview',  # Don't show snapshot previews
             ]
@@ -1216,9 +1226,12 @@ class TVHeadendClient(QMainWindow):
 
             print("Debug: VLC media player created successfully")
 
-        except Exception as e:
+            # Set initial volume to match the slider default (50%)
+            self.media_player.audio_set_volume(50)
+
+        except (OSError, AttributeError, RuntimeError) as e:
             print(f"Error initializing VLC: {str(e)}")
-            raise RuntimeError(f"Failed to initialize VLC: {str(e)}")
+            raise RuntimeError(f"Failed to initialize VLC: {str(e)}") from e
 
         # Then setup UI
         self.setup_ui()
@@ -1263,7 +1276,7 @@ class TVHeadendClient(QMainWindow):
         """Setup application paths for resources"""
         if getattr(sys, 'frozen', False):
             # Running as PyInstaller bundle
-            self.app_dir = Path(sys._MEIPASS)
+            self.app_dir = Path(sys._MEIPASS)  # pylint: disable=protected-access
         else:
             # Running in development
             self.app_dir = Path(os.path.dirname(os.path.abspath(__file__)))
@@ -1295,9 +1308,9 @@ class TVHeadendClient(QMainWindow):
                         Path(os.environ['SYSTEMROOT']) / 'System32' / 'icons'
                     ]
 
-                for dir in system_icon_dirs:
-                    if dir.exists():
-                        self.icons_dir = dir
+                for icon_dir in system_icon_dirs:
+                    if icon_dir.exists():
+                        self.icons_dir = icon_dir
                         print(f"Using system icons directory: {self.icons_dir}")
                         break
                 else:
@@ -1384,17 +1397,17 @@ class TVHeadendClient(QMainWindow):
         layout = QVBoxLayout(main_widget)
 
         # Create splitter for resizable panes
-        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Left pane
         left_pane = QFrame()
-        left_pane.setFrameStyle(QFrame.Panel | QFrame.Raised)
+        left_pane.setFrameStyle(QFrame.Shape.Panel | QFrame.Shadow.Raised)
         left_layout = QVBoxLayout(left_pane)
 
         # Server selection with add/remove buttons
         server_layout = QHBoxLayout()
         self.server_combo = QComboBox()
-        self.server_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.server_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         for server in self.servers:
             self.server_combo.addItem(server['name'])
 
@@ -1420,24 +1433,24 @@ class TVHeadendClient(QMainWindow):
         self.channel_list.setHorizontalHeaderLabels(['#', 'Icon', 'Channel', 'Current Program', 'Next Program'])
 
         # Configure column resize modes
-        self.channel_list.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)  # Channel number
+        self.channel_list.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # Channel number
 
         # Icon column - fixed width based on icon size
-        self.channel_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
+        self.channel_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         icon_size = self.config.get('icon_size', 48)
         self.channel_list.setColumnWidth(1, icon_size + 10)
 
         # Channel name - user resizable
-        self.channel_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.Interactive)
+        self.channel_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
         channel_column_width = self.config.get('channel_column_width', 80)  # Minimal width for channel names
         self.channel_list.setColumnWidth(2, channel_column_width)
 
         # EPG columns - both Current Program and Next Program user resizable
-        self.channel_list.horizontalHeader().setSectionResizeMode(3, QHeaderView.Interactive)  # Current program - user resizable
+        self.channel_list.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)  # Current program - user resizable
         current_program_width = self.config.get('current_program_width', 300)  # Default 300px, or saved value
         self.channel_list.setColumnWidth(3, current_program_width)
 
-        self.channel_list.horizontalHeader().setSectionResizeMode(4, QHeaderView.Interactive)  # Next program - user resizable
+        self.channel_list.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)  # Next program - user resizable
         next_program_width = self.config.get('next_program_width', 300)  # Default 300px, or saved value
         self.channel_list.setColumnWidth(4, next_program_width)
 
@@ -1447,7 +1460,7 @@ class TVHeadendClient(QMainWindow):
 
         # Track last valid sort for blocking sorts on certain columns
         self.last_valid_sort_column = 0
-        self.last_valid_sort_order = Qt.AscendingOrder
+        self.last_valid_sort_order = Qt.SortOrder.AscendingOrder
 
         # Enable word wrap for Next Program column (column 4) for two-line display
         self.channel_list.setWordWrap(True)
@@ -1461,19 +1474,19 @@ class TVHeadendClient(QMainWindow):
         icon_size = self.config.get('icon_size', 48)
         self.channel_list.setIconSize(QSize(icon_size, icon_size))
 
-        self.channel_list.setSelectionBehavior(QTableWidget.SelectRows)
-        self.channel_list.setSelectionMode(QTableWidget.SingleSelection)
+        self.channel_list.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.channel_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.channel_list.setSortingEnabled(True)
 
         # Hide horizontal scrollbar - user should resize splitter instead
-        self.channel_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.channel_list.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.channel_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.channel_list.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
         # Show sort indicator on header
         self.channel_list.horizontalHeader().setSortIndicatorShown(True)
 
         # Enable header context menu for column visibility
-        self.channel_list.horizontalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
+        self.channel_list.horizontalHeader().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.channel_list.horizontalHeader().customContextMenuRequested.connect(self.show_header_context_menu)
 
         # Save column widths when user manually resizes
@@ -1486,7 +1499,7 @@ class TVHeadendClient(QMainWindow):
         self.channel_list.itemDoubleClicked.connect(self.play_channel_from_table)
 
         # Connect context menu
-        self.channel_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.channel_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.channel_list.customContextMenuRequested.connect(self.show_channel_context_menu)
 
         left_layout.addWidget(QLabel(""))
@@ -1494,7 +1507,7 @@ class TVHeadendClient(QMainWindow):
 
         # Right pane
         right_pane = QFrame()
-        right_pane.setFrameStyle(QFrame.Panel | QFrame.Raised)
+        right_pane.setFrameStyle(QFrame.Shape.Panel | QFrame.Shadow.Raised)
         right_layout = QVBoxLayout(right_pane)
         right_layout.setObjectName("right_layout")
 
@@ -1513,9 +1526,9 @@ class TVHeadendClient(QMainWindow):
         controls_layout = QHBoxLayout()
        # Create frame for play/stop buttons
         playback_frame = QFrame()
-        playback_frame.setStyleSheet(".QFrame{border: 1px solid grey; border-radius: 8px;}");
+        playback_frame.setStyleSheet(".QFrame{border: 1px solid grey; border-radius: 8px;}")
         playback_frame.setWindowTitle("Playback")
-        playback_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        playback_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
         playback_frame.setLineWidth(5)  # Make frame thicker
         playback_layout = QHBoxLayout(playback_frame)
 
@@ -1525,10 +1538,7 @@ class TVHeadendClient(QMainWindow):
         self.play_btn.setIcon(QIcon(f"{self.icons_dir}/play.svg"))
         self.play_btn.setIconSize(QSize(48, 48))
         self.play_btn.setStyleSheet("QPushButton { border-radius: 24px; }")
-        self.play_btn.clicked.connect(lambda: self.play_channel_by_data(
-            self.channel_list.currentItem().data(Qt.UserRole) if self.channel_list.currentItem()
-            else self.channel_list.item(0, 2).data(Qt.UserRole) if self.channel_list.rowCount() > 0
-            else None))
+        self.play_btn.clicked.connect(self.play_current_channel)
         self.play_btn.setToolTip("Play selected channel")
         playback_layout.addWidget(self.play_btn)
 
@@ -1538,7 +1548,7 @@ class TVHeadendClient(QMainWindow):
         self.stop_btn.setIcon(QIcon(f"{self.icons_dir}/stop.svg"))
         self.stop_btn.setIconSize(QSize(48, 48))
         self.stop_btn.setStyleSheet("QPushButton { border-radius: 24px; }")
-        self.stop_btn.clicked.connect(self.media_player.stop)
+        self.stop_btn.clicked.connect(self.stop_playback)
         self.stop_btn.setToolTip("Stop playback")
         playback_layout.addWidget(self.stop_btn)
 
@@ -1546,9 +1556,9 @@ class TVHeadendClient(QMainWindow):
 
         # Create frame for record buttons
         record_frame = QFrame()
-        record_frame.setStyleSheet(".QFrame{border: 1px solid grey; border-radius: 8px;}");
+        record_frame.setStyleSheet(".QFrame{border: 1px solid grey; border-radius: 8px;}")
         record_frame.setWindowTitle("Recording")
-        record_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        record_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
         record_frame.setLineWidth(5)  # Make frame thicker
         record_layout = QHBoxLayout(record_frame)
 
@@ -1576,9 +1586,9 @@ class TVHeadendClient(QMainWindow):
 
         # Create frame for local record buttons
         local_record_frame = QFrame()
-        local_record_frame.setStyleSheet(".QFrame{border: 1px solid grey; border-radius: 8px;}");
+        local_record_frame.setStyleSheet(".QFrame{border: 1px solid grey; border-radius: 8px;}")
         local_record_frame.setWindowTitle("Local Recording")
-        local_record_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        local_record_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
         local_record_layout = QHBoxLayout(local_record_frame)
 
         # Start Local Record button
@@ -1623,7 +1633,7 @@ class TVHeadendClient(QMainWindow):
         self.mute_btn.setStyleSheet("QPushButton { border: none; }")
 
 
-        self.volume_slider = QSlider(Qt.Horizontal)
+        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(50)
         self.volume_slider.setFixedWidth(150)  # Set fixed width to make slider less wide
@@ -1702,7 +1712,7 @@ class TVHeadendClient(QMainWindow):
         self.statusbar.addWidget(status_container)
 
         # Override showMessage to update our custom label
-        def custom_show_message(message, timeout=0):
+        def custom_show_message(message, _timeout=0):
             self.status_label.setText(message)
         self.statusbar.showMessage = custom_show_message
 
@@ -1744,20 +1754,20 @@ class TVHeadendClient(QMainWindow):
         # Style placeholder text
         placeholder_color = QColor(100, 100, 100)  # Dark gray color
         search_palette = self.search_box.palette()
-        search_palette.setColor(QPalette.PlaceholderText, placeholder_color)
+        search_palette.setColor(QPalette.ColorRole.PlaceholderText, placeholder_color)
         self.search_box.setPalette(search_palette)
 
         self.search_box.setPlaceholderText("Press S to search channels...")
         self.search_box.textChanged.connect(self.filter_channels)
         self.search_box.setClearButtonEnabled(True)  # Add clear button inside search box
 
-        # Add Ctrl+F shortcut for search box
-        search_shortcut = QShortcut(QKeySequence(Qt.Key_S, Qt.NoModifier), self)
+        # Add S shortcut for search box
+        search_shortcut = QShortcut(QKeySequence(Qt.Key.Key_S), self)
         search_shortcut.activated.connect(self.search_box.setFocus)
 
         # Create custom clear button action
         clear_action = QAction("⌫", self.search_box)
-        self.search_box.addAction(clear_action, QLineEdit.TrailingPosition)
+        self.search_box.addAction(clear_action, QLineEdit.ActionPosition.TrailingPosition)
 
         search_layout.addWidget(search_icon)
         search_layout.addWidget(self.search_box)
@@ -1862,15 +1872,15 @@ class TVHeadendClient(QMainWindow):
                     # Create all items first, before inserting row
                     # Column 0: Channel number
                     number_item = QTableWidgetItem()
-                    number_item.setData(Qt.DisplayRole, channel['number'])
+                    number_item.setData(Qt.ItemDataRole.DisplayRole, channel['number'])
 
                     # Column 1: Icon only
                     icon_item = QTableWidgetItem()
-                    icon_item.setData(Qt.UserRole, channel['data'])  # Store channel data on icon item too
+                    icon_item.setData(Qt.ItemDataRole.UserRole, channel['data'])  # Store channel data on icon item too
 
                     # Column 2: Channel name (use NaturalSortTableWidgetItem for natural sorting)
                     name_item = NaturalSortTableWidgetItem(channel['name'])
-                    name_item.setData(Qt.UserRole, channel['data'])  # Store channel data
+                    name_item.setData(Qt.ItemDataRole.UserRole, channel['data'])  # Store channel data
 
                     # Column 3: Current program (will be populated by EPG update with progress)
                     current_item = QTableWidgetItem("")
@@ -1911,7 +1921,7 @@ class TVHeadendClient(QMainWindow):
             # Restore saved sort order (visual indicator only, channels already sorted manually)
             if 'sort_column' in self.config and 'sort_order' in self.config:
                 sort_column = self.config['sort_column']
-                sort_order = self.config['sort_order']
+                sort_order = Qt.SortOrder(self.config['sort_order'])  # Cast int to Qt.SortOrder
                 # Update last valid sort
                 self.last_valid_sort_column = sort_column
                 self.last_valid_sort_order = sort_order
@@ -1944,7 +1954,7 @@ class TVHeadendClient(QMainWindow):
                 number_item = self.channel_list.item(row, 0)
                 name_item = self.channel_list.item(row, 2)  # Column 2 now contains the name
                 if number_item and name_item:
-                    number = number_item.data(Qt.DisplayRole)
+                    number = number_item.data(Qt.ItemDataRole.DisplayRole)
                     name = name_item.text()
                     print(f"Row {row}: #{number} - {name}")
                 else:
@@ -1967,7 +1977,7 @@ class TVHeadendClient(QMainWindow):
             if not hasattr(self, 'progress_refresh_timer'):
                 self.start_progress_refresh_timer()
 
-        except Exception as e:
+        except (requests.RequestException, json.JSONDecodeError, KeyError) as e:
             print(f"Debug: Error in fetch_channels: {str(e)}")
             print(f"Debug: Error type: {type(e)}")
             print(f"Debug: Traceback: {traceback.format_exc()}")
@@ -1978,7 +1988,7 @@ class TVHeadendClient(QMainWindow):
                 f"Unexpected error: {str(e)}",
                 self
             )
-            if dialog.exec_() == QDialog.Accepted:
+            if dialog.exec() == QDialog.DialogCode.Accepted:
                 print("Debug: Retrying connection...")
                 self.fetch_channels()
             else:
@@ -1999,7 +2009,7 @@ class TVHeadendClient(QMainWindow):
 
             # Show duration dialog
             duration_dialog = RecordingDurationDialog(self)
-            if duration_dialog.exec_() != QDialog.Accepted:
+            if duration_dialog.exec() != QDialog.DialogCode.Accepted:
                 print("Debug: Recording cancelled by user")
                 return
 
@@ -2060,7 +2070,7 @@ class TVHeadendClient(QMainWindow):
             record_url = f'{server["url"]}/api/dvr/entry/create'
             print(f"Debug: Sending recording request to: {record_url}")
 
-            response = requests.post(record_url, data=data, auth=auth)
+            response = requests.post(record_url, data=data, auth=auth, timeout=30)
             print(f"Debug: Recording response status: {response.status_code}")
             print(f"Debug: Recording response: {response.text}")
 
@@ -2075,16 +2085,15 @@ class TVHeadendClient(QMainWindow):
                 self.statusbar.showMessage("Failed to start recording")
                 print(f"Debug: Recording failed with status {response.status_code}")
 
-        except Exception as e:
-            print(f"Debug: Recording error: {str(e)}")
+        except requests.RequestException as e:
+            print(f"Debug: Recording network error: {str(e)}")
             print(f"Debug: Error type: {type(e)}")
-
             print(f"Debug: Traceback: {traceback.format_exc()}")
             self.statusbar.showMessage(f"Recording error: {str(e)}")
 
     def stop_playback(self):
-        print("Debug: Stopping playback")
         """Stop current playback"""
+        print("Debug: Stopping playback")
         self.media_player.stop()
         self.statusbar.showMessage("Playback stopped")
 
@@ -2101,7 +2110,7 @@ class TVHeadendClient(QMainWindow):
 
             # Create a new fullscreen window
                 self.fullscreen_window = QWidget()
-                self.fullscreen_window.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
+                self.fullscreen_window.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
                 self.fullscreen_window.installEventFilter(self)
                 layout = QVBoxLayout(self.fullscreen_window)
                 layout.setContentsMargins(0, 0, 0, 0)
@@ -2163,7 +2172,7 @@ class TVHeadendClient(QMainWindow):
     def load_servers(self):
         """Load TVHeadend server configurations"""
         try:
-            with open('servers.json', 'r') as f:
+            with open('servers.json', 'r', encoding='utf-8') as f:
                 return json.load(f)
         except FileNotFoundError:
             # Return empty list if no config file exists
@@ -2180,7 +2189,7 @@ class TVHeadendClient(QMainWindow):
         dialog = ServerDialog(self)
         dialog.load_servers(self.servers)
         print(f"Debug: Loaded {len(self.servers)} servers into dialog")
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             self.servers = dialog.servers
             print(f"Debug: Updated servers list, now has {len(self.servers)} servers")
             self.save_config()
@@ -2213,15 +2222,73 @@ class TVHeadendClient(QMainWindow):
             # to avoid overwriting the correct value with stale UI state
 
             # Save to file
-            with open(self.config_file, 'w') as f:
+            with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, indent=2)
             print("Debug: Configuration saved successfully")
-        except Exception as e:
+        except (OSError, TypeError) as e:
             print(f"Debug: Error saving config: {str(e)}")
             traceback.print_exc()
 
-    def play_channel(self, item):
-        """Play the selected channel"""
+    def get_channel_uuid(self, channel_data):
+        """
+        Safely extract channel UUID from channel data with fallback options.
+        TVHeadend API may use different field names for the channel identifier.
+
+        Args:
+            channel_data (dict): Channel data from TVHeadend API
+
+        Returns:
+            str: Channel UUID/ID if found, None otherwise
+        """
+        # Try common field names in order of likelihood
+        possible_keys = ['uuid', 'id', 'channelid', 'ch_id', 'channel_id']
+
+        for key in possible_keys:
+            if key in channel_data and channel_data[key]:
+                uuid_value = channel_data[key]
+                print(f"Debug: Found channel identifier in '{key}': {uuid_value}")
+                return uuid_value
+
+        # If we get here, no UUID was found
+        print(f"Debug: No UUID found in channel data. Available keys: {list(channel_data.keys())}")
+        return None
+
+    def play_current_channel(self):
+        """Play the currently selected channel (called by play button)"""
+        try:
+            # Get the current row (works regardless of which column is selected)
+            current_row = self.channel_list.currentRow()
+            if current_row < 0:
+                # No row selected, try to play first channel
+                if self.channel_list.rowCount() > 0:
+                    current_row = 0
+                else:
+                    print("Debug: No channels available")
+                    self.statusbar.showMessage("No channels available")
+                    return
+
+            # Always get channel data from column 2 (name column), not from current cell
+            name_item = self.channel_list.item(current_row, 2)
+            if not name_item:
+                print("Debug: No channel item found in column 2")
+                return
+
+            # Get the channel data stored in UserRole
+            channel_data = name_item.data(Qt.ItemDataRole.UserRole)
+            if not channel_data:
+                print("Debug: No channel data found in item")
+                return
+
+            # Use the centralized play function
+            self.play_channel_by_data(channel_data)
+
+        except Exception as e:
+            print(f"Debug: Error in play_current_channel: {str(e)}")
+            print(f"Debug: Traceback: {traceback.format_exc()}")
+            self.statusbar.showMessage(f"Error playing channel: {str(e)}")
+
+    def play_channel(self, _item):
+        """Play the selected channel (redirects to play_channel_by_data)"""
         try:
             # Get the current row
             current_row = self.channel_list.currentRow()
@@ -2237,28 +2304,18 @@ class TVHeadendClient(QMainWindow):
                 return
 
             # Get the channel data stored in UserRole
-            channel_data = name_item.data(Qt.UserRole)
+            channel_data = name_item.data(Qt.ItemDataRole.UserRole)
             if not channel_data:
                 print("Debug: No channel data found in item")
                 return
 
-            print(f"Debug: Playing channel: {channel_data.get('name', 'Unknown')}")
+            # Use the centralized play function
+            self.play_channel_by_data(channel_data)
 
-            # Get current server
-            server = self.servers[self.server_combo.currentIndex()]
-
-            # Construct proper URL
-            base_url = server['url']
-            if not base_url.startswith(('http://', 'https://')):
-                base_url = f"http://{base_url}"
-
-            url = f"{base_url}/stream/channel/{channel_data['uuid']}"
-            print(f"Debug: Playing URL: {url}")
-
-            # Rest of the play logic...
         except Exception as e:
             print(f"Debug: Error in play_channel: {str(e)}")
             print(f"Debug: Traceback: {traceback.format_exc()}")
+            self.statusbar.showMessage(f"Error playing channel: {str(e)}")
 
     def on_server_changed(self, index):
         """
@@ -2295,16 +2352,16 @@ class TVHeadendClient(QMainWindow):
     def eventFilter(self, obj, event):
         """Handle double-click and key events"""
         if obj == self.video_frame:
-            if event.type() == event.MouseButtonDblClick:
+            if event.type() == QEvent.Type.MouseButtonDblClick:
                 self.toggle_fullscreen()
                 return True
 
         # Handle key events for both main window and fullscreen window
-        if event.type() == event.KeyPress:
-            if event.key() == Qt.Key_Escape and self.is_fullscreen:
+        if event.type() == QEvent.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Escape and self.is_fullscreen:
                 self.toggle_fullscreen()
                 return True
-            elif event.key() == Qt.Key_F:
+            elif event.key() == Qt.Key.Key_F:
                 self.toggle_fullscreen()
                 return True
 
@@ -2328,7 +2385,7 @@ class TVHeadendClient(QMainWindow):
     def show_settings(self):
         """Show settings dialog"""
         dialog = SettingsDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             # Get new settings (only icon size now)
             icon_size = dialog.get_settings()
 
@@ -2360,7 +2417,7 @@ class TVHeadendClient(QMainWindow):
         for row in range(self.channel_list.rowCount()):
             icon_item = self.channel_list.item(row, 1)  # Column 1 now has icons
             if icon_item:
-                channel_data = icon_item.data(Qt.UserRole)
+                channel_data = icon_item.data(Qt.ItemDataRole.UserRole)
                 if channel_data:
                     icon_url = channel_data.get('icon_public_url') or channel_data.get('icon')
                     if icon_url:
@@ -2379,11 +2436,11 @@ class TVHeadendClient(QMainWindow):
             'This will delete all cached channel icons for all servers.\n\n'
             'Icons will be downloaded again when you switch to a server.\n\n'
             'Continue?',
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
 
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             try:
                 # Delete entire channel_icons directory
                 if os.path.exists(self.icon_cache_base_dir):
@@ -2436,11 +2493,11 @@ class TVHeadendClient(QMainWindow):
             'AND delete all cached channel icons for all servers.\n\n'
             'Server configurations will NOT be affected.\n\n'
             'Continue?',
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
 
-        if reply == QMessageBox.Yes:
+        if reply == QMessageBox.StandardButton.Yes:
             # Remove UI-related config keys
             keys_to_reset = [
                 'channel_column_width',
@@ -2463,7 +2520,7 @@ class TVHeadendClient(QMainWindow):
                 if os.path.exists(self.icon_cache_base_dir):
                     shutil.rmtree(self.icon_cache_base_dir)
                     os.makedirs(self.icon_cache_base_dir, exist_ok=True)
-                    print(f"Debug: Deleted icon cache as part of factory reset")
+                    print("Debug: Deleted icon cache as part of factory reset")
             except Exception as e:
                 print(f"Debug: Error deleting icon cache during reset: {str(e)}")
 
@@ -2485,7 +2542,7 @@ class TVHeadendClient(QMainWindow):
             "<p>A powerful and user-friendly TVHeadend client application.</p>"
             "<p style='margin-top: 20px;'><b>Created by:</b><br>mFat</p>"
             "<p style='margin-top: 20px;'><b>Built with:</b><br>"
-            "Python, PyQt5, and VLC</p>"
+            "Python, PyQt6, and VLC</p>"
             "<p style='margin-top: 20px;'>"
             "<a href='https://github.com/mfat/tvhplayer'>Project Website</a>"
             "</p>"
@@ -2507,9 +2564,9 @@ class TVHeadendClient(QMainWindow):
         msg = QMessageBox()
         msg.setWindowTitle("About TVHplayer")
         msg.setText(about_text)
-        msg.setTextFormat(Qt.RichText)
+        msg.setTextFormat(Qt.TextFormat.RichText)
         msg.setMinimumWidth(400)  # Make dialog wider to prevent text wrapping
-        msg.exec_()
+        msg.exec()
 
     def show_user_guide(self):
         """Open the user guide documentation"""
@@ -2524,7 +2581,7 @@ class TVHeadendClient(QMainWindow):
             elif platform.system() == "Darwin":  # macOS
                 subprocess.Popen(["open", url])
             elif platform.system() == "Windows":
-                os.startfile(url)
+                os.startfile(url)  # pylint: disable=no-member
             else:
                 # Fallback using webbrowser module
 
@@ -2538,7 +2595,7 @@ class TVHeadendClient(QMainWindow):
                 self,
                 "Error",
                 f"Failed to open user guide: {str(e)}",
-                QMessageBox.Ok
+                QMessageBox.StandardButton.Ok
             )
 
     def toggle_recording(self):
@@ -2592,7 +2649,7 @@ class TVHeadendClient(QMainWindow):
                 data = {'uuid': recording['uuid']}
 
                 print(f"Debug: Stopping recording: {recording.get('disp_title', 'Unknown')} ({recording['uuid']})")
-                stop_response = requests.post(stop_url, data=data, auth=auth)
+                stop_response = requests.post(stop_url, data=data, auth=auth, timeout=30)
 
                 if stop_response.status_code == 200:
                     print(f"Debug: Successfully stopped recording: {recording['uuid']}")
@@ -2603,10 +2660,9 @@ class TVHeadendClient(QMainWindow):
             self.stop_recording_indicator()  # Hide the indicator after stopping recordings
             self.statusbar.showMessage(f"Stopped {len(active_recordings)} recording(s)")
 
-        except Exception as e:
-            print(f"Debug: Error stopping recordings: {str(e)}")
+        except requests.RequestException as e:
+            print(f"Debug: Network error stopping recordings: {str(e)}")
             print(f"Debug: Error type: {type(e)}")
-
             print(f"Debug: Traceback: {traceback.format_exc()}")
             self.statusbar.showMessage(f"Error stopping recordings: {str(e)}")
             self.stop_recording_indicator()  # Make sure to hide indicator even on error
@@ -2881,7 +2937,8 @@ class TVHeadendClient(QMainWindow):
             # Update status dialog if it exists
             if hasattr(self, 'recording_status_dialog'):
                 is_stalled = False
-                if hasattr(self, 'last_file_size') and file_size == self.last_file_size:
+                last_size = getattr(self, 'last_file_size', None)
+                if last_size is not None and file_size == last_size:
                     is_stalled = True
                 self.recording_status_dialog.update_status(file_size, is_stalled)
 
@@ -2902,8 +2959,9 @@ class TVHeadendClient(QMainWindow):
                         return
 
                 # Check if file is growing
-                if hasattr(self, 'last_file_size'):
-                    if file_size == self.last_file_size:
+                last_size = getattr(self, 'last_file_size', None)
+                if last_size is not None:
+                    if file_size == last_size:
                         print("Debug: File size not increasing - potential stall")
                         self.stall_count = getattr(self, 'stall_count', 0) + 1
                         if self.stall_count > 5:  # After 10 seconds of no growth
@@ -2966,7 +3024,7 @@ class TVHeadendClient(QMainWindow):
         """Load application configuration"""
         try:
             if os.path.exists(self.config_file):
-                with open(self.config_file, 'r') as f:
+                with open(self.config_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
             else:
                 # Return default configuration
@@ -2981,7 +3039,7 @@ class TVHeadendClient(QMainWindow):
                         'height': 700
                     },
                 }
-        except Exception as e:
+        except (OSError, json.JSONDecodeError) as e:
             print(f"Debug: Error loading config: {str(e)}")
             return self.get_default_config()
 
@@ -3028,7 +3086,7 @@ class TVHeadendClient(QMainWindow):
                 # No item at this position, don't show context menu
                 return
 
-            channel_data = channel_item.data(Qt.UserRole)
+            channel_data = channel_item.data(Qt.ItemDataRole.UserRole)
             if channel_data is None:
                 # No channel data stored, don't show context menu
                 return
@@ -3037,7 +3095,7 @@ class TVHeadendClient(QMainWindow):
             play_action = menu.addAction("Play")
             play_action.triggered.connect(lambda: self.play_channel_by_data(channel_data))
             record_action = menu.addAction("Record")
-            record_action.triggered.connect(lambda: self.start_recording())
+            record_action.triggered.connect(self.start_recording)
             local_record_action = menu.addAction("Record Locally")
             local_record_action.triggered.connect(
                 lambda: self.start_local_recording(channel_data['name']))
@@ -3047,7 +3105,7 @@ class TVHeadendClient(QMainWindow):
             epg_action.triggered.connect(lambda: self.show_channel_epg(channel_data['name']))
 
             # Show the menu at the cursor position
-            menu.exec_(self.channel_list.viewport().mapToGlobal(position))
+            menu.exec(self.channel_list.viewport().mapToGlobal(position))
 
     def show_channel_epg(self, channel_name):
         """Fetch and show EPG data for the selected channel"""
@@ -3116,7 +3174,7 @@ class TVHeadendClient(QMainWindow):
         """Play channel from table selection"""
         row = item.row()
         channel_item = self.channel_list.item(row, 2)  # Get name column item (now column 2)
-        channel_data = channel_item.data(Qt.UserRole)  # Original data is stored here
+        channel_data = channel_item.data(Qt.ItemDataRole.UserRole)  # Original data is stored here
         self.play_channel_by_data(channel_data)
 
     def play_channel_by_data(self, channel_data):
@@ -3128,13 +3186,11 @@ class TVHeadendClient(QMainWindow):
 
             # Create auth string if credentials exist
             auth_string = ''
-            auth = None
             if server.get('username') or server.get('password'):
-                auth = (server.get('username', ''), server.get('password', ''))
                 auth_string = f"{server.get('username', '')}:{server.get('password', '')}@"
 
-            # Use channel UUID directly from stored data
-            channel_uuid = channel_data['uuid']
+            # Safely extract channel UUID using helper function
+            channel_uuid = self.get_channel_uuid(channel_data)
 
             if channel_uuid:
                 # Create media URL with auth if needed
@@ -3153,14 +3209,37 @@ class TVHeadendClient(QMainWindow):
                     stream_url = f'{server_url}/stream/channel/{channel_uuid}'
                 print(f"Debug: Stream URL: {stream_url}")
 
+                # Create and configure media
                 media = self.instance.media_new(stream_url)
+                if not media:
+                    raise RuntimeError("Failed to create VLC media object")
+
+                # Set media and attempt playback with error handling
                 self.media_player.set_media(media)
-                self.media_player.play()
-                print(f"Debug: Started playback")
-                self.statusbar.showMessage(f"Playing: {channel_data['name']}")
+
+                # Start playback - this may fail silently or cause issues later
+                play_result = self.media_player.play()
+
+                if play_result == -1:
+                    # Play failed immediately
+                    raise RuntimeError("VLC play() returned error (-1)")
+
+                print(f"Debug: Started playback (play() returned {play_result})")
+                self.statusbar.showMessage(f"Playing: {channel_data.get('name', 'Unknown Channel')}")
+
+                # Note: Even if play() succeeds, stream errors may occur later
+                # VLC will handle these internally, but may log errors or stop playback
             else:
-                print(f"Debug: Channel not found: {channel_data['name']}")
-                self.statusbar.showMessage("Channel not found")
+                # UUID not found - show helpful error message
+                channel_name = channel_data.get('name', 'Unknown Channel')
+                error_msg = f"Cannot play channel '{channel_name}': Channel identifier not found"
+                print(f"Debug: {error_msg}")
+                self.statusbar.showMessage(error_msg)
+                QMessageBox.warning(
+                    self,
+                    "Playback Error",
+                    f"{error_msg}\n\nAvailable fields in channel data: {list(channel_data.keys())}"
+                )
 
         except Exception as e:
             print(f"Debug: Error in play_channel: {str(e)}")
@@ -3246,9 +3325,9 @@ class TVHeadendClient(QMainWindow):
             action.triggered.connect(lambda checked, idx=col_idx: self.toggle_column_visibility(idx, checked))
 
         # Show menu at cursor position
-        menu.exec_(self.channel_list.horizontalHeader().mapToGlobal(position))
+        menu.exec(self.channel_list.horizontalHeader().mapToGlobal(position))
 
-    def save_column_width(self, logical_index, old_size, new_size):
+    def save_column_width(self, logical_index, _old_size, new_size):
         """Debounced save - only saves after resize stops"""
         # Store values but don't save yet
         self.pending_column_resize = (logical_index, new_size)
@@ -3271,7 +3350,7 @@ class TVHeadendClient(QMainWindow):
             self.pending_column_resize = None
             self.save_config()
 
-    def save_splitter_position(self, pos, index):
+    def save_splitter_position(self, _pos, _index):
         """Debounced save - only saves after dragging stops"""
         # Store sizes but don't save yet
         self.pending_splitter_sizes = self.splitter.sizes()
@@ -3313,7 +3392,7 @@ class TVHeadendClient(QMainWindow):
     def save_sort_order(self, logical_index, order):
         """Save sort column and order to config"""
         self.config['sort_column'] = logical_index
-        self.config['sort_order'] = order  # Qt.AscendingOrder (0) or Qt.DescendingOrder (1)
+        self.config['sort_order'] = order.value  # Save as int for JSON: AscendingOrder (0) or DescendingOrder (1)
         self.save_config()
 
     def toggle_column_visibility(self, column_index, visible):
@@ -3342,7 +3421,7 @@ class TVHeadendClient(QMainWindow):
         for row in range(total_channels):
             name_item = self.channel_list.item(row, 2)
             if name_item:
-                channel_data = name_item.data(Qt.UserRole)
+                channel_data = name_item.data(Qt.ItemDataRole.UserRole)
                 if channel_data:
                     channel_uuid = channel_data.get('uuid')
                     channel_name = channel_data.get('name', 'Unknown')
@@ -3379,7 +3458,7 @@ class TVHeadendClient(QMainWindow):
         for r in range(self.channel_list.rowCount()):
             name_item = self.channel_list.item(r, 2)
             if name_item:
-                channel_data = name_item.data(Qt.UserRole)
+                channel_data = name_item.data(Qt.ItemDataRole.UserRole)
                 if channel_data and channel_data.get('uuid') == channel_uuid:
                     row = r
                     break
@@ -3448,7 +3527,7 @@ class TVHeadendClient(QMainWindow):
                 if current_program:
                     title = self.get_epg_title(current_program)
                     # Store full data for progress bar delegate
-                    current_item.setData(Qt.UserRole, {
+                    current_item.setData(Qt.ItemDataRole.UserRole, {
                         'title': title,
                         'start': current_program['start'],
                         'stop': current_program['stop']
@@ -3456,12 +3535,12 @@ class TVHeadendClient(QMainWindow):
                     # IMPORTANT: Set empty text and DisplayRole so Delegate draws everything!
                     # If we set text here, Qt displays the text instead of calling the delegate
                     current_item.setText("")
-                    current_item.setData(Qt.DisplayRole, "")  # Force delegate to paint
+                    current_item.setData(Qt.ItemDataRole.DisplayRole, "")  # Force delegate to paint
                     self.epg_updated_count += 1
                 else:
-                    current_item.setData(Qt.UserRole, None)
+                    current_item.setData(Qt.ItemDataRole.UserRole, None)
                     current_item.setText("")
-                    current_item.setData(Qt.DisplayRole, "")
+                    current_item.setData(Qt.ItemDataRole.DisplayRole, "")
 
             # Update next program column (column 4) - single-line display (time + title)
             next_item = self.channel_list.item(row, 4)
@@ -3483,7 +3562,6 @@ class TVHeadendClient(QMainWindow):
         except Exception as e:
             # Log exceptions for troubleshooting (essential for development)
             print(f"Debug EPG: Exception for '{channel_name}': {str(e)}")
-            import traceback
             traceback.print_exc()
 
         # Schedule next channel update (non-blocking)
@@ -3555,7 +3633,7 @@ class TVHeadendClient(QMainWindow):
                 return True
             return False
 
-        except Exception as e:
+        except Exception:
             return False
 
     def download_icons_async(self):
@@ -3570,7 +3648,7 @@ class TVHeadendClient(QMainWindow):
         for row in range(self.channel_list.rowCount()):
             icon_item = self.channel_list.item(row, 1)  # Column 1 now has icons
             if icon_item:
-                channel_data = icon_item.data(Qt.UserRole)
+                channel_data = icon_item.data(Qt.ItemDataRole.UserRole)
                 if channel_data:
                     icon_url = channel_data.get('icon_public_url') or channel_data.get('icon')
                     if icon_url:
@@ -3733,7 +3811,7 @@ class EPGDialog(QDialog):
             record_url = f'{self.server["url"]}/api/dvr/entry/create'
             print(f"Debug: Sending recording request to: {record_url}")
 
-            response = requests.post(record_url, data=data, auth=auth)
+            response = requests.post(record_url, data=data, auth=auth, timeout=30)
             print(f"Debug: Recording response status: {response.status_code}")
             print(f"Debug: Recording response: {response.text}")
 
@@ -3828,19 +3906,15 @@ class RecordingStatusDialog(QDialog):
 def main():
     """Main entry point for the application"""
     try:
-        # Enable High-DPI scaling for sharp icons and UI
-        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-
-        # Force the application to use XCB instead of Wayland
-        # This helps with VLC integration under Wayland
-        QCoreApplication.setAttribute(Qt.AA_X11InitThreads, True)
-        os.environ["QT_QPA_PLATFORM"] = "xcb"
+        # Force the application to use correct platform plugin
+        # XCB for Linux/Wayland, Windows for Windows
+        if sys.platform != 'win32':
+            os.environ["QT_QPA_PLATFORM"] = "xcb"  # Linux: use XCB instead of Wayland for VLC integration
 
         app = QApplication(sys.argv)
         player = TVHeadendClient()
         player.show()
-        sys.exit(app.exec_())
+        sys.exit(app.exec())
     except Exception as e:
         print(f"Error starting application: {str(e)}")
         print(f"Traceback: {traceback.format_exc()}")
