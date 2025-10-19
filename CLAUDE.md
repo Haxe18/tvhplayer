@@ -156,6 +156,34 @@ Automated builds run via `.github/workflows/build.yml`:
 - No separation between components - changes require careful review of the entire context
 - Main entry point is the `main()` function at the end of the file
 
+### Configuration Constants
+
+Top-level constants define all magic numbers for maintainability:
+
+**Download Configuration:**
+- `DOWNLOAD_CHUNK_SIZE = 8192`: 8 KB chunks for HTTP downloads
+- `DOWNLOAD_THREAD_TIMEOUT_MS = 2000`: Thread cleanup timeout
+
+**UI Update Intervals:**
+- `SEEK_UPDATE_INTERVAL_MS = 500`: Seek bar refresh rate
+- `RECORDING_MONITOR_INTERVAL_MS = 2000`: FFmpeg recording monitor
+
+**Visual Constants:**
+- `PROGRESS_OVERLAY_OPACITY = 76`: Progress button overlay alpha (30%)
+- `PLAY_BUTTON_COLUMN_WIDTH = 40`: DVR table play button column
+- `SEEK_FEEDBACK_DURATION_MS = 2000`: Statusbar seek feedback duration
+
+**Async Delays:**
+- `ASYNC_ICON_DOWNLOAD_DELAY_MS = 50`: Delay between icon downloads
+- `ASYNC_EPG_UPDATE_DELAY_MS = 20`: Delay between EPG updates
+
+### Utility Functions
+
+**`format_duration(seconds)`** (module-level):
+- Formats seconds to MM:SS or HH:MM:SS string
+- Used throughout application for time display (seek bar, recordings, EPG)
+- Example: `format_duration(3665)` → `"01:01:05"`
+
 ### Key Classes and Functions
 
 - **`natural_sort_key(channel_name)`** (line ~853): Natural/human sorting for channel names
@@ -173,6 +201,23 @@ Automated builds run via `.github/workflows/build.yml`:
   - Draws program title, time range, and animated progress bar in table cells
   - Color-coded progress: Green (0-25%), Blue (25-75%), Orange (75-100%)
   - Auto-refreshes every 60 seconds for live progress updates
+
+- **`ProgressButton(QPushButton)`** (line ~1710): Custom button with radial progress indicator
+  - Clock-style fill animation (0-360° from 12 o'clock)
+  - Semi-transparent green overlay (PROGRESS_OVERLAY_OPACITY constant)
+  - Used for download progress visualization
+  - `setProgress(value)`: Update progress (0-100)
+
+- **`DownloadThread(QThread)`** (line ~1756): HTTP download thread with progress tracking
+  - Threaded downloads prevent UI blocking
+  - Chunk-based streaming (DOWNLOAD_CHUNK_SIZE constant)
+  - Emits signals: `progress_changed(int)`, `finished()`, `error(str)`
+  - Cancellable via `cancelled` flag
+  - Automatic cleanup of partial files on cancellation
+  - Thread lifecycle management:
+    - Timeout-based cleanup (DOWNLOAD_THREAD_TIMEOUT_MS)
+    - Force termination if timeout exceeded
+    - Proper cleanup in `closeEvent()` of both DVRStatusDialog and TVHeadendClient
 
 - **`AppearanceDialog(QDialog)`** (line ~1420): Theme/appearance settings dialog
   - Theme mode options: Auto (Follow System), Light Mode, Dark Mode
@@ -199,6 +244,22 @@ Automated builds run via `.github/workflows/build.yml`:
 
 - **Other Dialog Classes**:
   - `DVRStatusDialog`: Display DVR status and scheduled recordings
+    - Three tabs: Upcoming/Current, Finished, Failed
+    - Play buttons in first column for direct playback (created via `_create_play_button_widget()`)
+    - Optimized column widths with responsive table layout:
+      - Play column: Fixed width (PLAY_BUTTON_COLUMN_WIDTH constant)
+      - Channel/Duration/Status: ResizeToContents (auto-fit content)
+      - Title: Stretch mode (fills available space)
+    - Zero-padding table cells for compact layout
+    - Manual refresh via Refresh button (no auto-updates)
+    - Auto-closes on playback (internal player only)
+    - Refactored architecture with helper methods:
+      - `_fetch_dvr_entries()`: API call to fetch DVR data
+      - `_categorize_entries()`: Sort entries into upcoming/finished/failed
+      - `_populate_upcoming_table()`: Populate upcoming/current tab with `setUpdatesEnabled()` optimization
+      - `_populate_finished_table()`: Populate finished tab with `setUpdatesEnabled()` optimization
+      - `_populate_failed_table()`: Populate failed tab with `setUpdatesEnabled()` optimization
+      - `update_status()`: Orchestrates the update workflow
   - `RecordingDurationDialog`: Set custom recording duration
   - `ServerDialog`: Quick server connection setup
   - `ServerConfigDialog`: Detailed server configuration

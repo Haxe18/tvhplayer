@@ -24,8 +24,19 @@ With TVHplayer you can:
   - Word-wrapped tooltips with max-width for better readability
 - Schedule recordings
 - Initiate instant recordings with custom duration
-- Record live TV locally on your computer
+- Download DVR recordings to local disk
+  - Threaded HTTP downloads with real-time progress tracking
+  - Visual progress indicators: button overlay + progress dialog
+  - Cancellable downloads with automatic cleanup of partial files
+  - Non-blocking UI - continue using the app while downloading
+- Record live TV locally on your computer (FFmpeg-based streaming)
 - Monitor your server status, signal strength and DVR
+  - Refactored DVR Status dialog with clean architecture
+  - Play buttons for instant playback of recordings (auto-close on play)
+  - Three tabs: Upcoming/Current, Finished, Failed recordings
+  - Manual refresh button (user-controlled updates, no auto-refresh)
+  - Smart column sizing: fixed/auto-fit/stretch modes for optimal space usage
+  - Performance optimized with batched table updates and reduced logging
 - Customize channel icon sizes (48px - 100px)
 - Dark Mode support with automatic system theme detection
   - Three modes: Auto (follow system), Light Mode, Dark Mode
@@ -113,6 +124,15 @@ To do this:
 - **Centralized version management**: Single source of truth in `tvhplayer/__version__.py`
   - Used by application code, setup.py, and all build scripts
   - Eliminates version duplication and sync issues
+
+**Code Quality:**
+- Refactored codebase with clean separation of concerns
+- Configuration constants for all magic numbers (no hardcoded values)
+- Threaded operations (downloads, EPG updates) prevent UI blocking
+- Race condition prevention with locks and proper thread lifecycle management
+- Performance optimizations: batched table updates with `setUpdatesEnabled()`
+- Comprehensive error handling with logging and user feedback
+- Modular architecture: helper methods for complex operations
 
 **Build System:**
 - Automated builds via GitHub Actions for all platforms

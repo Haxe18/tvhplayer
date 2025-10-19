@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 import webbrowser
@@ -23,21 +24,73 @@ try:
 except ImportError:
     # Direct execution fallback
     from __version__ import __version__
-from PyQt6.QtCore import (QEasingCurve, QEvent, QPropertyAnimation, QSize, Qt,
-                          QTimer)
-from PyQt6.QtGui import (QAction, QColor, QFont, QIcon, QKeySequence, QPalette,
-                         QPixmap, QShortcut)
+
+from PyQt6.QtCore import (QEasingCurve, QEvent, QPropertyAnimation, QRectF,
+                          QSize, Qt, QThread, QTimer, pyqtSignal)
+from PyQt6.QtGui import (QAction, QColor, QFont, QIcon, QKeySequence, QPainter,
+                         QPainterPath, QPalette, QPen, QPixmap, QShortcut)
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QComboBox,
                              QDialog, QDialogButtonBox, QFileDialog,
                              QFormLayout, QFrame, QGraphicsOpacityEffect,
                              QGroupBox, QHBoxLayout, QHeaderView, QLabel,
                              QLineEdit, QListWidget, QListWidgetItem,
                              QMainWindow, QMenu, QMessageBox, QPushButton,
-                             QRadioButton, QSizePolicy, QSlider, QSpinBox,
-                             QSplitter, QStatusBar, QStyle,
+                             QProgressDialog, QRadioButton, QSizePolicy,
+                             QSlider, QSpinBox, QSplitter, QStatusBar, QStyle,
                              QStyledItemDelegate, QTableWidget,
                              QTableWidgetItem, QTabWidget, QTextEdit,
                              QToolButton, QVBoxLayout, QWidget)
+
+# ============================================================================
+# CONFIGURATION CONSTANTS
+# ============================================================================
+
+# Download Configuration
+DOWNLOAD_CHUNK_SIZE = 8192  # 8 KB chunks for optimal memory/speed balance
+DOWNLOAD_THREAD_TIMEOUT_MS = 2000  # Max wait time for thread cleanup (2 seconds)
+
+# UI Update Intervals
+SEEK_UPDATE_INTERVAL_MS = 500  # Update seek bar twice per second
+RECORDING_MONITOR_INTERVAL_MS = 2000  # Check local recording status every 2 seconds
+
+# Visual Constants
+PROGRESS_OVERLAY_OPACITY = 76  # 30% alpha for progress indicator (76/255 ≈ 0.3)
+PLAY_BUTTON_COLUMN_WIDTH = 40  # Fixed width for play button column in pixels
+SEEK_FEEDBACK_DURATION_MS = 2000  # Duration to show seek position feedback (2 seconds)
+
+# Table Update Batch Size
+ASYNC_ICON_DOWNLOAD_DELAY_MS = 50  # Delay between async icon downloads
+ASYNC_EPG_UPDATE_DELAY_MS = 20  # Delay between async EPG updates per channel
+
+
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
+
+def format_duration(seconds):
+    """
+    Format seconds to MM:SS or HH:MM:SS string.
+
+    Args:
+        seconds (int): Duration in seconds
+
+    Returns:
+        str: Formatted duration string (MM:SS or HH:MM:SS)
+
+    Examples:
+        >>> format_duration(65)
+        '01:05'
+        >>> format_duration(3665)
+        '01:01:05'
+    """
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    else:
+        return f"{minutes:02d}:{secs:02d}"
 
 
 def create_dark_palette():
@@ -272,6 +325,12 @@ def get_dark_mode_stylesheet():
             background-color: #2a82da;
         }
 
+        QPushButton:disabled {
+            background-color: #333333;
+            color: #666666;
+            border: 1px solid #444444;
+        }
+
         QLineEdit {
             background-color: #3d3d3d;
             color: #ffffff;
@@ -434,6 +493,12 @@ def get_light_mode_stylesheet():
         QPushButton:pressed {
             background-color: #0078d7;
             color: #ffffff;
+        }
+
+        QPushButton:disabled {
+            background-color: #e0e0e0;
+            color: #a0a0a0;
+            border: 1px solid #d0d0d0;
         }
 
         QLineEdit {
@@ -636,11 +701,6 @@ class DVRStatusDialog(QDialog):
         self.resize(800, 600)
         self.setup_ui()
 
-        # Update timer
-        self.update_timer = QTimer()
-        self.update_timer.timeout.connect(self.update_status)
-        self.update_timer.start(5000)  # Update every 5 seconds
-
         # Initial update
         self.update_status()
 
@@ -653,31 +713,90 @@ class DVRStatusDialog(QDialog):
 
         # Upcoming/Current recordings tab
         self.upcoming_table = QTableWidget()
-        self.upcoming_table.setColumnCount(5)  # Added one more column for status
-        self.upcoming_table.setHorizontalHeaderLabels(['Channel', 'Title', 'Start Time', 'Duration', 'Status'])
-        self.upcoming_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        self.tabs.addTab(self.upcoming_table, "Upcoming/Current")  # Changed tab title
+        self.upcoming_table.setColumnCount(6)  # Added Play column
+        self.upcoming_table.setHorizontalHeaderLabels(['Play', 'Channel', 'Title', 'Start Time', 'Duration', 'Status'])
+        # Configure column resize modes for optimal space usage
+        self.upcoming_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)  # Play: fixed width
+        self.upcoming_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # Channel
+        self.upcoming_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # Title: takes available space
+        self.upcoming_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Start Time
+        self.upcoming_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Duration
+        self.upcoming_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # Status
+        self.upcoming_table.setColumnWidth(0, PLAY_BUTTON_COLUMN_WIDTH)
+        self.upcoming_table.setStyleSheet("QTableWidget::item { padding: 0px; }")
+        self.upcoming_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tabs.addTab(self.upcoming_table, "Upcoming/Current")
 
         # Finished recordings tab
         self.finished_table = QTableWidget()
-        self.finished_table.setColumnCount(4)
-        self.finished_table.setHorizontalHeaderLabels(['Channel', 'Title', 'Start Time', 'Duration'])
-        self.finished_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.finished_table.setColumnCount(5)  # Added Play column
+        self.finished_table.setHorizontalHeaderLabels(['Play', 'Channel', 'Title', 'Start Time', 'Duration'])
+        # Configure column resize modes for optimal space usage
+        self.finished_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)  # Play: fixed width
+        self.finished_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # Channel
+        self.finished_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # Title: takes available space
+        self.finished_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # Start Time
+        self.finished_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)  # Duration
+        self.finished_table.setColumnWidth(0, PLAY_BUTTON_COLUMN_WIDTH)
+        self.finished_table.setStyleSheet("QTableWidget::item { padding: 0px; }")
+        self.finished_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.tabs.addTab(self.finished_table, "Finished")
 
         # Failed recordings tab
         self.failed_table = QTableWidget()
         self.failed_table.setColumnCount(4)
         self.failed_table.setHorizontalHeaderLabels(['Channel', 'Title', 'Start Time', 'Error'])
-        self.failed_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        # Configure column resize modes for optimal space usage
+        self.failed_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # Channel
+        self.failed_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Title: takes available space
+        self.failed_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Start Time
+        self.failed_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)  # Error: takes available space
+        self.failed_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.tabs.addTab(self.failed_table, "Failed")
 
-        # Close button
+        # Button layout (Refresh + Close)
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()  # Push buttons to the right
+
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self.update_status)
+        button_layout.addWidget(refresh_btn)
+
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.accept)
-        layout.addWidget(close_btn)
+        button_layout.addWidget(close_btn)
 
-    def update_status(self):
+        layout.addLayout(button_layout)
+
+    def _create_play_button_widget(self, dvr_entry):
+        """
+        Create play button widget with zero-margin container.
+
+        Args:
+            dvr_entry (dict): DVR entry data from TVHeadend API
+
+        Returns:
+            QWidget: Container widget with play button
+        """
+        play_btn = QPushButton("▶")
+        play_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        play_btn.clicked.connect(lambda checked, e=dvr_entry: self.play_and_close(e))
+
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(play_btn, 1)  # stretch=1 to fill column width
+
+        return container
+
+    def _fetch_dvr_entries(self):
+        """
+        Fetch DVR entries from TVHeadend server API.
+
+        Returns:
+            list: List of DVR entry dicts, or empty list on error
+        """
         try:
             # Create auth if needed
             auth = None
@@ -692,99 +811,209 @@ class DVRStatusDialog(QDialog):
                 data = response.json()
                 entries = data.get('entries', [])
                 print(f"Debug: Found {len(entries)} DVR entries")
-
-                # Sort entries by status
-                upcoming = []
-                finished = []
-                failed = []
-
-                for entry in entries:
-                    status = entry.get('status', '')  # Don't convert to lowercase yet
-                    sched_status = entry.get('sched_status', '').lower()
-                    errors = entry.get('errors', 0)
-                    error_code = entry.get('errorcode', 0)
-
-                    print(f"\nDebug: Processing entry: {entry.get('disp_title', 'Unknown')}")
-                    print(f"  Status: {status}")
-                    print(f"  Sched Status: {sched_status}")
-
-                    # Check status (case-sensitive for "Running")
-                    if status == "Running":
-                        print(f"Debug: Found active recording: {entry.get('disp_title', 'Unknown')}")
-                        upcoming.append((entry.get('channelname', 'Unknown'), entry.get('disp_title', 'Unknown'), datetime.fromtimestamp(entry.get('start', 0)), timedelta(seconds=entry.get('duration', 0)), True))
-                    elif 'scheduled' in status.lower() or sched_status == 'scheduled':
-                        upcoming.append((entry.get('channelname', 'Unknown'), entry.get('disp_title', 'Unknown'), datetime.fromtimestamp(entry.get('start', 0)), timedelta(seconds=entry.get('duration', 0)), False))
-                    elif 'completed' in status.lower() or status.lower() == 'finished':
-                        finished.append((entry.get('channelname', 'Unknown'), entry.get('disp_title', 'Unknown'), datetime.fromtimestamp(entry.get('start', 0)), timedelta(seconds=entry.get('duration', 0))))
-                    elif ('failed' in status.lower() or 'invalid' in status.lower() or
-                          'error' in status.lower() or errors > 0 or error_code != 0):
-                        error_msg = entry.get('error', '')
-                        if not error_msg and errors > 0:
-                            error_msg = f"Recording failed with {errors} errors"
-                        if not error_msg and error_code != 0:
-                            error_msg = f"Error code: {error_code}"
-                        if not error_msg:
-                            error_msg = "Unknown error"
-                        failed.append((entry.get('channelname', 'Unknown'), entry.get('disp_title', 'Unknown'), datetime.fromtimestamp(entry.get('start', 0)), error_msg))
-                        print(f"Debug: Added to failed: {entry.get('disp_title', 'Unknown')} (Error: {error_msg})")
-                    else:
-                        print(f"Debug: Unhandled status: {status} for entry: {entry.get('disp_title', 'Unknown')}")
-
-                print(f"\nDebug: Sorted entries - Upcoming: {len(upcoming)}, "
-                      f"Finished: {len(finished)}, Failed: {len(failed)}")
-
-                # Sort upcoming recordings by start time
-                upcoming.sort(key=lambda x: x[2])  # Sort by start_time
-
-                # Update tables
-                self.upcoming_table.setRowCount(len(upcoming))
-                for i, (channel, title, start, duration, is_recording) in enumerate(upcoming):
-                    self.upcoming_table.setItem(i, 0, QTableWidgetItem(channel))
-                    self.upcoming_table.setItem(i, 1, QTableWidgetItem(title))
-                    self.upcoming_table.setItem(i, 2, QTableWidgetItem(start.strftime('%Y-%m-%d %H:%M')))
-                    self.upcoming_table.setItem(i, 3, QTableWidgetItem(str(duration)))
-
-                    # Add status column
-                    status = "Recording" if is_recording else "Scheduled"
-                    self.upcoming_table.setItem(i, 4, QTableWidgetItem(status))
-
-                    # Highlight currently recording entries
-                    if is_recording:
-                        for col in range(5):  # Update range to include new column
-                            self.upcoming_table.item(i, col).setBackground(QColor('green'))
-
-                # Sort finished recordings by start time (most recent first)
-                finished.sort(key=lambda x: x[2], reverse=True)
-
-                self.finished_table.setRowCount(len(finished))
-                for i, (channel, title, start, duration) in enumerate(finished):
-                    self.finished_table.setItem(i, 0, QTableWidgetItem(channel))
-                    self.finished_table.setItem(i, 1, QTableWidgetItem(title))
-                    self.finished_table.setItem(i, 2, QTableWidgetItem(start.strftime('%Y-%m-%d %H:%M')))
-                    self.finished_table.setItem(i, 3, QTableWidgetItem(str(duration)))
-
-                # Sort failed recordings by start time (most recent first)
-                failed.sort(key=lambda x: x[2], reverse=True)
-
-                self.failed_table.setRowCount(len(failed))
-                for i, (channel, title, start, error) in enumerate(failed):
-                    self.failed_table.setItem(i, 0, QTableWidgetItem(channel))
-                    self.failed_table.setItem(i, 1, QTableWidgetItem(title))
-                    self.failed_table.setItem(i, 2, QTableWidgetItem(start.strftime('%Y-%m-%d %H:%M')))
-                    self.failed_table.setItem(i, 3, QTableWidgetItem(error))
-                    # Highlight failed entries in red
-                    for col in range(4):
-                        self.failed_table.item(i, col).setBackground(QColor('red'))
-
+                return entries
             else:
                 print(f"Debug: Failed to fetch DVR entries. Status code: {response.status_code}")
+                return []
+        except Exception as e:
+            print(f"Debug: Error fetching DVR entries: {str(e)}")
+            print(f"Debug: Traceback: {traceback.format_exc()}")
+            return []
+
+    def _categorize_entries(self, entries):
+        """
+        Categorize DVR entries into upcoming/finished/failed lists.
+
+        Args:
+            entries (list): List of DVR entry dicts from API
+
+        Returns:
+            tuple: (upcoming, finished, failed) lists
+        """
+        upcoming = []
+        finished = []
+        failed = []
+
+        for entry in entries:
+            status = entry.get('status', '')  # Don't convert to lowercase yet
+            sched_status = entry.get('sched_status', '').lower()
+            errors = entry.get('errors', 0)
+            error_code = entry.get('errorcode', 0)
+
+            # Only log interesting events (not every completed recording)
+            # Check status (case-sensitive for "Running")
+            if status == "Running":
+                print(f"Debug: Active recording: {entry.get('disp_title', 'Unknown')}")
+                upcoming.append((entry, entry.get('channelname', 'Unknown'), entry.get('disp_title', 'Unknown'), datetime.fromtimestamp(entry.get('start', 0)), timedelta(seconds=entry.get('duration', 0)), True))
+            elif 'scheduled' in status.lower() or sched_status == 'scheduled':
+                upcoming.append((entry, entry.get('channelname', 'Unknown'), entry.get('disp_title', 'Unknown'), datetime.fromtimestamp(entry.get('start', 0)), timedelta(seconds=entry.get('duration', 0)), False))
+            elif 'completed' in status.lower() or status.lower() == 'finished':
+                finished.append((entry, entry.get('channelname', 'Unknown'), entry.get('disp_title', 'Unknown'), datetime.fromtimestamp(entry.get('start', 0)), timedelta(seconds=entry.get('duration', 0))))
+            elif ('failed' in status.lower() or 'invalid' in status.lower() or
+                  'error' in status.lower() or errors > 0 or error_code != 0):
+                error_msg = entry.get('error', '')
+                if not error_msg and errors > 0:
+                    error_msg = f"Recording failed with {errors} errors"
+                if not error_msg and error_code != 0:
+                    error_msg = f"Error code: {error_code}"
+                if not error_msg:
+                    error_msg = "Unknown error"
+                failed.append((entry.get('channelname', 'Unknown'), entry.get('disp_title', 'Unknown'), datetime.fromtimestamp(entry.get('start', 0)), error_msg))
+                print(f"Debug: Failed recording: {entry.get('disp_title', 'Unknown')} (Error: {error_msg})")
+            else:
+                # Unhandled status - log for debugging
+                print(f"Debug: Unhandled status '{status}' for: {entry.get('disp_title', 'Unknown')}")
+
+        print(f"\nDebug: Sorted entries - Upcoming: {len(upcoming)}, "
+              f"Finished: {len(finished)}, Failed: {len(failed)}")
+
+        return upcoming, finished, failed
+
+    def _populate_upcoming_table(self, upcoming):
+        """
+        Populate upcoming/current recordings table.
+
+        Args:
+            upcoming (list): List of upcoming recording tuples
+        """
+        # Disable updates for performance
+        self.upcoming_table.setUpdatesEnabled(False)
+
+        # Sort upcoming recordings by start time
+        upcoming.sort(key=lambda x: x[3])  # Sort by start_time (index 3 = start datetime)
+
+        # Update table
+        self.upcoming_table.setRowCount(len(upcoming))
+        for i, (entry, channel, title, start, duration, is_recording) in enumerate(upcoming):
+            # Use helper method to create play button
+            self.upcoming_table.setCellWidget(i, 0, self._create_play_button_widget(entry))
+
+            self.upcoming_table.setItem(i, 1, QTableWidgetItem(channel))
+            self.upcoming_table.setItem(i, 2, QTableWidgetItem(title))
+            self.upcoming_table.setItem(i, 3, QTableWidgetItem(start.strftime('%Y-%m-%d %H:%M')))
+
+            # Format duration with leading zeros (HH:MM:SS)
+            total_sec = int(duration.total_seconds())
+            hours, remainder = divmod(total_sec, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            duration_item = QTableWidgetItem(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+            duration_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.upcoming_table.setItem(i, 4, duration_item)
+
+            # Add status column
+            status = "Recording" if is_recording else "Scheduled"
+            self.upcoming_table.setItem(i, 5, QTableWidgetItem(status))
+
+            # Highlight currently recording entries
+            if is_recording:
+                for col in range(1, 6):  # Skip play button column
+                    self.upcoming_table.item(i, col).setBackground(QColor('green'))
+
+        # Re-enable updates
+        self.upcoming_table.setUpdatesEnabled(True)
+
+    def _populate_finished_table(self, finished):
+        """
+        Populate finished recordings table.
+
+        Args:
+            finished (list): List of finished recording tuples
+        """
+        # Disable updates for performance
+        self.finished_table.setUpdatesEnabled(False)
+
+        # Sort finished recordings by start time (most recent first)
+        finished.sort(key=lambda x: x[3], reverse=True)  # Index 3 = start datetime
+
+        self.finished_table.setRowCount(len(finished))
+        for i, (entry, channel, title, start, duration) in enumerate(finished):
+            # Use helper method to create play button
+            self.finished_table.setCellWidget(i, 0, self._create_play_button_widget(entry))
+
+            self.finished_table.setItem(i, 1, QTableWidgetItem(channel))
+            self.finished_table.setItem(i, 2, QTableWidgetItem(title))
+            self.finished_table.setItem(i, 3, QTableWidgetItem(start.strftime('%Y-%m-%d %H:%M')))
+
+            # Format duration with leading zeros (HH:MM:SS)
+            total_sec = int(duration.total_seconds())
+            hours, remainder = divmod(total_sec, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            duration_item = QTableWidgetItem(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+            duration_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.finished_table.setItem(i, 4, duration_item)
+
+        # Re-enable updates
+        self.finished_table.setUpdatesEnabled(True)
+
+    def _populate_failed_table(self, failed):
+        """
+        Populate failed recordings table.
+
+        Args:
+            failed (list): List of failed recording tuples
+        """
+        # Disable updates for performance
+        self.failed_table.setUpdatesEnabled(False)
+
+        # Sort failed recordings by start time (most recent first)
+        failed.sort(key=lambda x: x[2], reverse=True)  # Index 2 = start datetime
+
+        self.failed_table.setRowCount(len(failed))
+        for i, (channel, title, start, error) in enumerate(failed):
+            self.failed_table.setItem(i, 0, QTableWidgetItem(channel))
+            self.failed_table.setItem(i, 1, QTableWidgetItem(title))
+            self.failed_table.setItem(i, 2, QTableWidgetItem(start.strftime('%Y-%m-%d %H:%M')))
+            self.failed_table.setItem(i, 3, QTableWidgetItem(error))
+            # Highlight failed entries in red
+            for col in range(4):
+                self.failed_table.item(i, col).setBackground(QColor('red'))
+
+        # Re-enable updates
+        self.failed_table.setUpdatesEnabled(True)
+
+    def update_status(self):
+        """Update DVR status by fetching and categorizing entries, then populating tables."""
+        try:
+            dvr_entries = self._fetch_dvr_entries()
+            if not dvr_entries:
+                return
+
+            upcoming, finished, failed = self._categorize_entries(dvr_entries)
+            self._populate_upcoming_table(upcoming)
+            self._populate_finished_table(finished)
+            self._populate_failed_table(failed)
 
         except Exception as e:
             print(f"Debug: Error updating DVR status: {str(e)}")
             print(f"Debug: Traceback: {traceback.format_exc()}")
 
+    def play_and_close(self, dvr_entry):
+        """Play DVR recording and close dialog if using internal player"""
+        # Get parent (TVHeadendClient) and start playback
+        parent = self.parent()
+        parent.play_dvr_recording(dvr_entry)
+
+        # Close dialog only if using internal VLC player
+        use_external = parent.config.get('use_external_vlc', False)
+        if not use_external:
+            print("Debug: Closing DVR Status dialog (internal player - video visible in main window)")
+            self.accept()  # Close dialog
+        else:
+            print("Debug: Keeping DVR Status dialog open (external player)")
+
     def closeEvent(self, event):
-        self.update_timer.stop()
+        """Clean up resources when dialog closes."""
+        # Stop and cleanup any running download thread
+        parent = self.parent()
+        if parent and hasattr(parent, 'download_thread') and parent.download_thread:
+            if parent.download_thread.isRunning():
+                print("Debug: Cancelling download due to DVR dialog close")
+                parent.download_thread.cancelled = True
+                parent.download_thread.wait(DOWNLOAD_THREAD_TIMEOUT_MS)
+                if parent.download_thread.isRunning():
+                    print("Debug: Force terminating download thread")
+                    parent.download_thread.terminate()
+
         super().closeEvent(event)
 
 class RecordingDurationDialog(QDialog):
@@ -1489,6 +1718,122 @@ class ProgressBarDelegate(QStyledItemDelegate):
         # Minimum height for text + progress bar
         return QSize(option.rect.width(), 35)
 
+class ProgressButton(QPushButton):
+    """Custom QPushButton with radial progress indicator"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._progress = 0  # 0-100
+
+    def setProgress(self, value):
+        """Set progress value (0-100)"""
+        self._progress = max(0, min(100, value))  # Clamp to 0-100
+        self.update()  # Trigger repaint
+
+    def progress(self):
+        """Get current progress value"""
+        return self._progress
+
+    def paintEvent(self, event):
+        """Paint button with optional progress fill (clock style from inside)"""
+        # Draw normal button first (background, border, icon)
+        super().paintEvent(event)
+
+        # Draw progress fill if progress > 0
+        if self._progress > 0:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+            # Get button rect
+            rect = self.rect()
+            center_x = rect.width() / 2.0
+            center_y = rect.height() / 2.0
+            radius = min(rect.width(), rect.height()) / 2.0
+
+            # Create pie-shaped path (clock fill from 12 o'clock)
+            path = QPainterPath()
+            path.moveTo(center_x, center_y)  # Move to center
+
+            # Calculate angle for progress (0% = 0°, 100% = 360°)
+            angle_span = (self._progress / 100.0) * 360.0
+
+            # Create arc from -90° (12 o'clock) clockwise by angle_span
+            # Qt: 0° = 3 o'clock, negative = clockwise
+            circle_rect = QRectF(center_x - radius, center_y - radius,
+                                radius * 2, radius * 2)
+            path.arcTo(circle_rect, 90, -angle_span)  # 90° = 12 o'clock, negative = clockwise
+            path.closeSubpath()
+
+            # Fill with semi-transparent green (30% opacity)
+            painter.fillPath(path, QColor(76, 175, 80, PROGRESS_OVERLAY_OPACITY))
+
+class DownloadThread(QThread):
+    """Thread for downloading files via HTTP with progress tracking"""
+    progress_changed = pyqtSignal(int)  # Emits progress 0-100
+    finished = pyqtSignal()  # Emits when download completes
+    error = pyqtSignal(str)  # Emits error message
+
+    def __init__(self, url, file_path, auth=None):
+        super().__init__()
+        self.url = url
+        self.file_path = file_path
+        self.auth = auth
+        self.cancelled = False
+        self._last_percent = -1  # Track last emitted percent (prevent duplicate signals)
+
+    def run(self):
+        """Download file with progress updates"""
+        try:
+            print(f"Debug: DownloadThread starting - URL: {self.url}")
+            print(f"Debug: Saving to: {self.file_path}")
+
+            # Start streaming download
+            response = session.get(self.url, auth=self.auth, stream=True, timeout=30)
+            response.raise_for_status()
+
+            # Get total file size from Content-Length header
+            total_size = int(response.headers.get('content-length', 0))
+            print(f"Debug: Total download size: {total_size} bytes ({total_size / 1024 / 1024:.2f} MB)")
+
+            if total_size == 0:
+                self.error.emit("Cannot determine file size (Content-Length missing)")
+                return
+
+            # Download in chunks
+            downloaded = 0
+
+            with open(self.file_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                    # Check for cancellation
+                    if self.cancelled:
+                        print("Debug: Download cancelled by user")
+                        response.close()
+                        # Delete partial file
+                        try:
+                            os.remove(self.file_path)
+                        except:
+                            pass
+                        return
+
+                    # Write chunk
+                    if chunk:  # Filter out keep-alive chunks
+                        f.write(chunk)
+                        downloaded += len(chunk)
+
+                        # Calculate and emit progress (only if changed)
+                        percent = int((downloaded / total_size) * 100)
+                        if percent != self._last_percent:
+                            self.progress_changed.emit(percent)
+                            self._last_percent = percent
+
+            print(f"Debug: Download completed - {downloaded} bytes")
+            self.finished.emit()
+
+        except Exception as e:
+            error_msg = f"Download failed: {str(e)}"
+            print(f"Debug: {error_msg}")
+            print(f"Debug: Traceback: {traceback.format_exc()}")
+            self.error.emit(error_msg)
+
 class AppearanceDialog(QDialog):
     """Dialog for appearance/theme settings"""
     def __init__(self, parent=None):
@@ -1805,6 +2150,14 @@ class TVHeadendClient(QMainWindow):
 
         # Track temporary M3U playlist files for cleanup
         self.temp_m3u_files = []
+
+        # DVR playback tracking (for seek bar visibility)
+        self.is_playing_recording = False
+        self.current_dvr_entry = None  # Store current DVR entry for download functionality
+        self.seek_update_timer = QTimer()
+        self.seek_update_timer.timeout.connect(self.update_seek_slider)
+        self.seeking = False  # Track if user is currently dragging the seek slider
+        self._seek_update_lock = False  # Lock to prevent concurrent seek slider updates
 
         # Initialize VLC with basic instance first
         print("Debug: Initializing VLC instance")
@@ -2162,14 +2515,57 @@ class TVHeadendClient(QMainWindow):
 
         # VLC player widget
         self.video_frame = QWidget()
-        self.video_frame.setStyleSheet("""
-            background-color: black;
-            background-image: url(icons/playerbg.svg);
-            background-position: center;
-            background-repeat: no-repeat;
-        """)
+        self.video_frame.setStyleSheet("background-color: black;")
 
         right_layout.addWidget(self.video_frame)
+
+        # Logo overlay (shown when no video is playing)
+        self.logo_label = QLabel(self.video_frame)
+        logo_path = f"{self.icons_dir}/playerbg.svg"
+        if os.path.exists(logo_path):
+            pixmap = QPixmap(logo_path)
+            self.logo_label.setPixmap(pixmap)
+            # Keep natural size (don't scale)
+            self.logo_label.setFixedSize(pixmap.size())
+            self.logo_label.setStyleSheet("background: transparent;")
+            # Center logo in video_frame (will be adjusted on resize)
+            self._center_logo()
+            # Initially show logo (no video playing)
+            self.logo_label.show()
+            print(f"Debug: Logo loaded from {logo_path} (size: {pixmap.width()}x{pixmap.height()})")
+        else:
+            print(f"Warning: Logo not found at {logo_path}")
+
+        # Seek bar for DVR recordings (hidden by default, only shown for recordings)
+        seek_widget = QWidget()
+        seek_widget.setMaximumHeight(40)
+        seek_layout = QHBoxLayout(seek_widget)
+        seek_layout.setContentsMargins(5, 0, 5, 0)
+        seek_layout.setSpacing(5)
+
+        self.current_time_label = QLabel("00:00")
+        self.current_time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.current_time_label.setFixedWidth(60)
+        seek_layout.addWidget(self.current_time_label)
+
+        self.seek_slider = QSlider(Qt.Orientation.Horizontal)
+        self.seek_slider.setRange(0, 0)
+        self.seek_slider.setTracking(True)
+        self.seek_slider.valueChanged.connect(self.on_seek_slider_changed)
+        self.seek_slider.sliderPressed.connect(self.on_seek_slider_pressed)
+        self.seek_slider.sliderReleased.connect(self.on_seek_slider_released)
+        seek_layout.addWidget(self.seek_slider)
+
+        self.total_time_label = QLabel("00:00")
+        self.total_time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.total_time_label.setFixedWidth(60)
+        seek_layout.addWidget(self.total_time_label)
+
+        # Store seek widget for easy show/hide
+        self.seek_widget = seek_widget
+        self.seek_widget.hide()
+
+        right_layout.addWidget(self.seek_widget)
 
         # Player controls
         controls_layout = QHBoxLayout()
@@ -2233,33 +2629,33 @@ class TVHeadendClient(QMainWindow):
 
         controls_layout.addWidget(record_frame)
 
-        # Create frame for local record buttons
+        # Create frame for download buttons (renamed from "Local Recording")
         local_record_frame = QFrame()
         local_record_frame.setStyleSheet(".QFrame{border: 1px solid grey; border-radius: 8px;}")
-        local_record_frame.setWindowTitle("Local Recording")
+        local_record_frame.setWindowTitle("Download")
         local_record_frame.setFrameStyle(QFrame.Shape.StyledPanel | QFrame.Shadow.Raised)
         local_record_layout = QHBoxLayout(local_record_frame)
 
-        # Start Local Record button
-        self.start_local_record_btn = QPushButton()
-        self.start_local_record_btn.setFixedSize(48, 48)  # Remove extra parenthesis
+        # Start Download button (with progress indicator)
+        self.start_local_record_btn = ProgressButton()
+        self.start_local_record_btn.setFixedSize(48, 48)
         self.start_local_record_btn.setIcon(QIcon(f"{self.icons_dir}/reclocal.svg"))
         self.start_local_record_btn.setIconSize(QSize(48, 48))
         self.start_local_record_btn.setStyleSheet("QPushButton { border-radius: 24px; }")
-        self.start_local_record_btn.setToolTip("Start Local Recording")
+        self.start_local_record_btn.setToolTip("Download stream to local file")
         self.start_local_record_btn.clicked.connect(
             lambda: self.start_local_recording(
                 self.channel_list.currentItem().text() if self.channel_list.currentItem() else None
             ))
         local_record_layout.addWidget(self.start_local_record_btn)
 
-        # Stop Local Record button
+        # Stop Download button
         self.stop_local_record_btn = QPushButton()
-        self.stop_local_record_btn.setFixedSize(48, 48)  # Remove extra parenthesis
+        self.stop_local_record_btn.setFixedSize(48, 48)
         self.stop_local_record_btn.setIcon(QIcon(f"{self.icons_dir}/stopreclocal.svg"))
         self.stop_local_record_btn.setIconSize(QSize(48, 48))
         self.stop_local_record_btn.setStyleSheet("QPushButton { border-radius: 24px; }")
-        self.stop_local_record_btn.setToolTip("Stop Local Recording")
+        self.stop_local_record_btn.setToolTip("Stop download")
         self.stop_local_record_btn.clicked.connect(self.stop_local_recording)
         local_record_layout.addWidget(self.stop_local_record_btn)
 
@@ -2753,6 +3149,175 @@ class TVHeadendClient(QMainWindow):
         self.media_player.stop()
         self.statusbar.showMessage("Playback stopped")
 
+        # Show logo when playback stops
+        if hasattr(self, 'logo_label'):
+            self.logo_label.show()
+
+        # Reset DVR playback state and hide seek bar
+        self.is_playing_recording = False
+        self.current_dvr_entry = None  # Clear DVR entry reference
+        self.seek_update_timer.stop()
+        self.hide_seek_bar()
+
+        # Clear recording duration
+        if hasattr(self, 'recording_duration'):
+            self.recording_duration = 0
+
+        # Re-enable recording buttons
+        self.update_recording_buttons_state()
+
+    def show_seek_bar(self):
+        """Show seek bar for DVR recordings"""
+        self.seek_widget.show()
+
+    def hide_seek_bar(self):
+        """Hide seek bar (for live streams or external VLC)"""
+        self.seek_widget.hide()
+
+    def update_recording_buttons_state(self):
+        """Enable/disable recording buttons based on playback type"""
+        # Server recording: disabled during DVR playback (cannot record from recording)
+        # Download start: always enabled (can download recording OR live stream)
+        # Download stop: disabled during DVR playback (no download running yet)
+
+        is_dvr_playback = self.is_playing_recording
+
+        # Server recording buttons (disabled during DVR playback - cannot record from recording)
+        self.start_record_btn.setEnabled(not is_dvr_playback)
+        self.stop_record_btn.setEnabled(not is_dvr_playback)
+
+        # Download START button - ALWAYS enabled (can download recording OR stream)
+        self.start_local_record_btn.setEnabled(True)
+        self.start_local_record_btn.update()  # Force visual update
+
+        # Debug: Verify button state and parent state
+        print(f"Debug: Download Start button - setEnabled(True) called")
+        print(f"Debug: Download Start button - isEnabled() = {self.start_local_record_btn.isEnabled()}")
+        print(f"Debug: Download Start button parent (frame) - isEnabled() = {self.start_local_record_btn.parent().isEnabled()}")
+
+        # Download STOP button - disabled during DVR playback start (no download running yet)
+        # Will be enabled when download actually starts via start_local_recording()
+        if is_dvr_playback:
+            self.stop_local_record_btn.setEnabled(False)
+        # For live streams, stop button state is managed by download start/stop logic
+
+        if is_dvr_playback:
+            print("Debug: Server recording disabled, Download available (DVR playback)")
+        else:
+            print("Debug: All recording/download buttons enabled (live stream or stopped)")
+
+    def update_seek_slider(self):
+        """Update seek slider position based on VLC playback position"""
+        if not self.is_playing_recording or self.seeking:
+            return
+
+        # Use lock to prevent concurrent updates
+        if self._seek_update_lock:
+            return
+
+        self._seek_update_lock = True
+        try:
+            # Get current position and length from VLC
+            length = self.media_player.get_length()  # milliseconds
+            position = self.media_player.get_time()  # milliseconds
+            position_sec = position // 1000
+
+            # Block signals to prevent triggering valueChanged during programmatic update
+            self.seek_slider.blockSignals(True)
+
+            # Priority order for determining total duration:
+            # 1. VLC length (most accurate if available)
+            # 2. DVR entry duration from metadata (always available from TVHeadend)
+            # 3. Adaptive fallback (position-based estimate)
+
+            if length > 0:
+                # VLC knows the length - use it
+                max_value = length // 1000
+                duration_source = "VLC"
+            elif hasattr(self, 'recording_duration') and self.recording_duration > 0:
+                # Use duration from DVR entry metadata (TVHeadend knows recording length)
+                max_value = self.recording_duration
+                duration_source = "Metadata"
+            else:
+                # Fallback: Adaptive range based on current position
+                max_value = max(position_sec * 2, 3600)  # At least 1 hour
+                duration_source = "Adaptive"
+
+            # Update slider and labels
+            self.seek_slider.setRange(0, max_value)
+            self.seek_slider.setValue(position_sec)
+            self.current_time_label.setText(format_duration(position_sec))
+            self.total_time_label.setText(format_duration(max_value))
+
+            # Always enable slider (user can seek even without knowing exact length)
+            self.seek_slider.setEnabled(True)
+
+            # Re-enable signals
+            self.seek_slider.blockSignals(False)
+
+        except Exception as e:
+            print(f"Debug: Error updating seek slider: {str(e)}")
+            print(f"Debug: Traceback: {traceback.format_exc()}")
+        finally:
+            # Always release lock
+            self._seek_update_lock = False
+
+    def on_seek_slider_pressed(self):
+        """Called when user starts dragging the seek slider"""
+        print("Debug: Seek slider pressed - pausing updates")
+        self.seeking = True
+        # Stop timer updates while user is seeking
+        self.seek_update_timer.stop()
+
+    def on_seek_slider_released(self):
+        """Called when user releases the seek slider"""
+        position = self.seek_slider.value()
+        print(f"Debug: Seek slider released at position: {position}s")
+
+        # Set final position
+        if self.is_playing_recording:
+            # For DVR streams, percentage-based seeking is more reliable than time-based
+            # Use recording duration from metadata to calculate percentage
+            if hasattr(self, 'recording_duration') and self.recording_duration > 0:
+                percentage = position / self.recording_duration
+                print(f"Debug: Setting VLC position to {percentage:.2%} ({position}s / {self.recording_duration}s)")
+
+                # set_position() is more reliable for streams than set_time()
+                self.media_player.set_position(percentage)
+
+                # Give VLC a moment to process
+                time.sleep(0.05)
+
+                # Verify
+                actual_pos = self.media_player.get_position()
+                actual_time = self.media_player.get_time()
+                print(f"Debug: VLC position after seek: {actual_pos:.2%} (≈{actual_time//1000}s)")
+            else:
+                # Fallback to time-based if duration not available
+                position_ms = position * 1000
+                print(f"Debug: No duration available, trying set_time({position_ms}ms)")
+                self.media_player.set_time(position_ms)
+
+            # Update label
+            self.current_time_label.setText(format_duration(position))
+
+            # Show seek feedback in status bar
+            self.statusbar.showMessage(f"Seeked to {format_duration(position)}", SEEK_FEEDBACK_DURATION_MS)
+
+        # Resume updates
+        self.seeking = False
+        if self.is_playing_recording:
+            print("Debug: Resuming slider updates")
+            self.seek_update_timer.start(SEEK_UPDATE_INTERVAL_MS)
+
+    def on_seek_slider_changed(self, position):
+        """Called when seek slider value changes (user interaction)"""
+        # Only process if user is actively seeking and we're playing a recording
+        if self.is_playing_recording and self.seeking:
+            # Update current time label immediately for visual feedback
+            self.current_time_label.setText(format_duration(position))
+            # Note: VLC position will be set on release for better performance
+
                 # Create a new fullscreen window
     def toggle_fullscreen(self):
         """Toggle fullscreen mode for VLC player"""
@@ -2892,7 +3457,6 @@ class TVHeadendClient(QMainWindow):
         Returns:
             str: Path to VLC binary if found, None otherwise
         """
-        import shutil
 
         if sys.platform == 'win32':
             # Windows: Try shutil.which first, then common install paths
@@ -2944,7 +3508,6 @@ class TVHeadendClient(QMainWindow):
         Returns:
             str: Path to temporary M3U file
         """
-        import tempfile
 
         try:
             # Ensure server_url has protocol
@@ -3146,11 +3709,16 @@ class TVHeadendClient(QMainWindow):
         self.save_config()
 
     def eventFilter(self, obj, event):
-        """Handle double-click and key events"""
+        """Handle double-click, resize, and key events"""
         if obj == self.video_frame:
             if event.type() == QEvent.Type.MouseButtonDblClick:
                 self.toggle_fullscreen()
                 return True
+            elif event.type() == QEvent.Type.Resize:
+                # Center logo when video_frame resizes
+                if hasattr(self, 'logo_label'):
+                    self._center_logo()
+                return False  # Let event propagate
 
         # Handle key events for both main window and fullscreen window
         if event.type() == QEvent.Type.KeyPress:
@@ -3162,6 +3730,13 @@ class TVHeadendClient(QMainWindow):
                 return True
 
         return super().eventFilter(obj, event)
+
+    def _center_logo(self):
+        """Center logo label in video_frame"""
+        if hasattr(self, 'logo_label') and hasattr(self, 'video_frame'):
+            x = (self.video_frame.width() - self.logo_label.width()) // 2
+            y = (self.video_frame.height() - self.logo_label.height()) // 2
+            self.logo_label.move(x, y)
 
     def toggle_mute(self):
         """Toggle audio mute state"""
@@ -3658,8 +4233,14 @@ class TVHeadendClient(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to play media: {str(e)}")
 
     def start_local_recording(self, channel_name):
-        """Record channel stream to local disk using ffmpeg"""
+        """Record channel stream to local disk using ffmpeg - supports both live streams and DVR recordings"""
         try:
+            # Check if we're in DVR playback mode
+            if self.is_playing_recording and self.current_dvr_entry:
+                print("Debug: DVR download mode - downloading current DVR recording")
+                return self._download_dvr_recording()
+
+            # Live stream recording mode
             if not channel_name:
                 print("Debug: No channel selected for recording")
                 self.statusbar.showMessage("Please select a channel to record")
@@ -3777,7 +4358,7 @@ class TVHeadendClient(QMainWindow):
             self.recording_monitor = QTimer()
             self.recording_monitor.timeout.connect(
                 lambda: self.check_recording_status(file_path))  # Close parenthesis here
-            self.recording_monitor.start(2000)  # Check every 2 seconds
+            self.recording_monitor.start(RECORDING_MONITOR_INTERVAL_MS)
 
             self.statusbar.showMessage(f"Local recording started: {file_path}")
             self.start_recording_indicator()
@@ -3793,6 +4374,142 @@ class TVHeadendClient(QMainWindow):
 
             print(f"Debug: Traceback: {traceback.format_exc()}")
             self.statusbar.showMessage(f"Local recording error: {str(e)}")
+
+    def _download_dvr_recording(self):
+        """Download the currently playing DVR recording to local disk using HTTP"""
+        try:
+            if not self.current_dvr_entry:
+                print("Debug: No DVR entry available for download")
+                self.statusbar.showMessage("No recording available to download")
+                return
+
+            dvr_uuid = self.current_dvr_entry.get('uuid')
+            dvr_title = self.current_dvr_entry.get('disp_title', 'recording')
+            dvr_channel = self.current_dvr_entry.get('channelname', 'unknown')
+
+            print(f"Debug: Downloading DVR recording: {dvr_title} from {dvr_channel} (UUID: {dvr_uuid})")
+
+            # Show file save dialog with DVR-specific filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Sanitize title for filename (remove invalid characters)
+            safe_title = "".join(c for c in dvr_title if c.isalnum() or c in (' ', '-', '_')).strip()
+            default_filename = f"dvr_{safe_title}_{timestamp}.ts"
+
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save DVR Recording As",
+                default_filename,
+                "TS Files (*.ts);;MP4 Files (*.mp4);;All Files (*.*)"
+            )
+
+            if not file_path:  # User cancelled
+                print("Debug: DVR download cancelled - no file selected")
+                return
+
+            # Get current server and auth info
+            server = self.servers[self.server_combo.currentIndex()]
+            server_url = server['url'].rstrip('/')
+            if not server_url.startswith(('http://', 'https://')):
+                server_url = f'http://{server_url}'
+
+            # DVR file URL (no /stream/ prefix!)
+            download_url = f'{server_url}/dvrfile/{dvr_uuid}'
+
+            # Build auth
+            auth = None
+            if server.get('username') or server.get('password'):
+                auth = (server.get('username', ''), server.get('password', ''))
+
+            print(f"Debug: Starting HTTP download from: {download_url}")
+            print(f"Debug: Saving to: {file_path}")
+
+            # Create and start download thread
+            self.download_thread = DownloadThread(download_url, file_path, auth)
+
+            # Connect signals
+            self.download_thread.progress_changed.connect(self._on_download_progress)
+            self.download_thread.finished.connect(self._on_download_finished)
+            self.download_thread.error.connect(self._on_download_error)
+
+            # Create and show progress dialog
+            self.download_progress_dialog = QProgressDialog(
+                f"Downloading: {dvr_title}",
+                "Cancel",
+                0,
+                100,
+                self
+            )
+            self.download_progress_dialog.setWindowTitle("Download Progress")
+            self.download_progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+            self.download_progress_dialog.canceled.connect(self._cancel_download)
+            self.download_progress_dialog.setAutoClose(True)
+            self.download_progress_dialog.setAutoReset(False)
+
+            # Start download
+            self.download_thread.start()
+
+            # Show progress dialog
+            self.download_progress_dialog.show()
+
+            # Enable stop button
+            self.stop_local_record_btn.setEnabled(True)
+
+            # Show status
+            self.statusbar.showMessage(f"Downloading DVR recording: {dvr_title}")
+
+        except Exception as e:
+            print(f"Debug: DVR download error: {str(e)}")
+            print(f"Debug: Error type: {type(e)}")
+            print(f"Debug: Traceback: {traceback.format_exc()}")
+            self.statusbar.showMessage(f"DVR download error: {str(e)}")
+
+    def _on_download_progress(self, percent):
+        """Handle download progress updates"""
+        # Ignore updates if thread was stopped (prevents race condition)
+        if not hasattr(self, 'download_thread') or self.download_thread is None:
+            print(f"Debug: Ignoring progress update (thread stopped): {percent}%")
+            return
+
+        self.start_local_record_btn.setProgress(percent)
+
+        # Update progress dialog if it exists
+        if hasattr(self, 'download_progress_dialog') and self.download_progress_dialog:
+            self.download_progress_dialog.setValue(percent)
+
+        print(f"Debug: Download progress: {percent}%")
+
+    def _on_download_finished(self):
+        """Handle download completion"""
+        print("Debug: Download finished successfully")
+        self.start_local_record_btn.setProgress(0)  # Reset progress
+        self.stop_local_record_btn.setEnabled(False)
+
+        # Close progress dialog
+        if hasattr(self, 'download_progress_dialog') and self.download_progress_dialog:
+            self.download_progress_dialog.close()
+            self.download_progress_dialog = None
+
+        self.statusbar.showMessage("Download completed successfully")
+        QMessageBox.information(self, "Download Complete", "DVR recording downloaded successfully!")
+
+    def _on_download_error(self, error_msg):
+        """Handle download errors"""
+        print(f"Debug: Download error: {error_msg}")
+        self.start_local_record_btn.setProgress(0)  # Reset progress
+        self.stop_local_record_btn.setEnabled(False)
+
+        # Close progress dialog
+        if hasattr(self, 'download_progress_dialog') and self.download_progress_dialog:
+            self.download_progress_dialog.close()
+            self.download_progress_dialog = None
+
+        self.statusbar.showMessage(f"Download failed: {error_msg}")
+        QMessageBox.critical(self, "Download Error", f"Download failed:\n{error_msg}")
+
+    def _cancel_download(self):
+        """Cancel ongoing download"""
+        print("Debug: User cancelled download via progress dialog")
+        self.stop_local_recording()
 
     def check_recording_status(self, file_path):
         """Check if the recording is actually working"""
@@ -3868,21 +4585,44 @@ class TVHeadendClient(QMainWindow):
             QMessageBox.critical(self, "Recording Error", error_msg)
 
     def stop_local_recording(self):
-        """Stop local recording"""
+        """Stop local recording or download"""
         try:
             # Close status dialog if it exists
             if hasattr(self, 'recording_status_dialog'):
                 self.recording_status_dialog.close()
                 delattr(self, 'recording_status_dialog')
 
-            print("Debug: Stopping local recording")
+            # Close progress dialog if it exists
+            if hasattr(self, 'download_progress_dialog') and self.download_progress_dialog:
+                self.download_progress_dialog.close()
+                self.download_progress_dialog = None
+
+            print("Debug: Stopping local recording/download")
+
+            # Stop HTTP download thread (DVR downloads)
+            if hasattr(self, 'download_thread') and self.download_thread is not None:
+                print("Debug: Stopping download thread")
+
+                # CRITICAL: Disconnect signals FIRST (prevents progress updates during shutdown)
+                try:
+                    self.download_thread.progress_changed.disconnect()
+                    self.download_thread.finished.disconnect()
+                    self.download_thread.error.disconnect()
+                    print("Debug: Download thread signals disconnected")
+                except Exception as e:
+                    print(f"Debug: Signal disconnect error (non-critical): {e}")
+
+                # Now stop the thread
+                self.download_thread.cancelled = True
+                self.download_thread.wait(DOWNLOAD_THREAD_TIMEOUT_MS)
+                self.download_thread = None
 
             # Stop monitoring
             if hasattr(self, 'recording_monitor') and self.recording_monitor is not None:
                 self.recording_monitor.stop()
                 self.recording_monitor = None
 
-            # Stop ffmpeg process
+            # Stop ffmpeg process (live stream recordings)
             if hasattr(self, 'ffmpeg_process') and self.ffmpeg_process is not None:
                 print("Debug: Stopping ffmpeg process")
                 self.ffmpeg_process.terminate()
@@ -3898,12 +4638,16 @@ class TVHeadendClient(QMainWindow):
             if hasattr(self, 'stall_count'):
                 del self.stall_count
 
-            self.statusbar.showMessage("Local recording stopped")
+            # ALWAYS reset progress indicator and disable stop button
+            self.start_local_record_btn.setProgress(0)
+            self.stop_local_record_btn.setEnabled(False)
+
+            self.statusbar.showMessage("Recording/download stopped")
             self.stop_recording_indicator()
 
         except Exception as e:
-            print(f"Debug: Error stopping local recording: {str(e)}")
-            self.statusbar.showMessage(f"Error stopping local recording: {str(e)}")
+            print(f"Debug: Error stopping recording/download: {str(e)}")
+            self.statusbar.showMessage(f"Error stopping recording/download: {str(e)}")
             self.stop_recording_indicator()
 
     def load_config(self):
@@ -3973,6 +4717,20 @@ class TVHeadendClient(QMainWindow):
                 except Exception as e:
                     print(f"Debug: Error cleaning up temp file on close: {str(e)}")
             self.temp_m3u_files.clear()
+
+        # Stop and cleanup any running download thread
+        if hasattr(self, 'download_thread') and self.download_thread:
+            if self.download_thread.isRunning():
+                print("Debug: Cancelling download due to application close")
+                self.download_thread.cancelled = True
+                self.download_thread.wait(DOWNLOAD_THREAD_TIMEOUT_MS)
+                if self.download_thread.isRunning():
+                    print("Debug: Force terminating download thread")
+                    self.download_thread.terminate()
+
+        # Stop seek update timer if running
+        if hasattr(self, 'seek_update_timer'):
+            self.seek_update_timer.stop()
 
         self.save_config()
         super().closeEvent(event)
@@ -4165,7 +4923,6 @@ class TVHeadendClient(QMainWindow):
                         self.temp_m3u_files.append(playlist_path)
 
                         # Launch external VLC with playlist file
-                        import subprocess
                         subprocess.Popen([vlc_binary, playlist_path])
                         print(f"Debug: Opened stream in external VLC: {vlc_binary}")
                         self.statusbar.showMessage(f"Opened in external VLC: {channel_data.get('name', 'Unknown Channel')}")
@@ -4200,6 +4957,18 @@ class TVHeadendClient(QMainWindow):
                     print(f"Debug: Started playback (play() returned {play_result})")
                     self.statusbar.showMessage(f"Playing: {channel_data.get('name', 'Unknown Channel')}")
 
+                    # Hide logo during video playback
+                    if hasattr(self, 'logo_label'):
+                        self.logo_label.hide()
+
+                    # Disable DVR playback mode for live streams - hide seek bar
+                    self.is_playing_recording = False
+                    self.seek_update_timer.stop()
+                    self.hide_seek_bar()
+
+                    # Enable recording buttons for live streams
+                    self.update_recording_buttons_state()
+
                 # Note: Even if play() succeeds, stream errors may occur later
                 # VLC will handle these internally, but may log errors or stop playback
             else:
@@ -4217,6 +4986,160 @@ class TVHeadendClient(QMainWindow):
         except Exception as e:
             print(f"Debug: Error in play_channel: {str(e)}")
             self.statusbar.showMessage(f"Playback error: {str(e)}")
+
+    def play_dvr_recording(self, dvr_entry):
+        """Play a DVR recording (finished or in-progress)"""
+        try:
+            server = self.servers[self.server_combo.currentIndex()]
+            server_url = server['url']
+
+            # Get DVR entry UUID
+            dvr_uuid = dvr_entry.get('uuid')
+            if not dvr_uuid:
+                QMessageBox.warning(
+                    self,
+                    "Playback Error",
+                    "Cannot play recording: UUID not found in DVR entry"
+                )
+                return
+
+            print(f"Debug: Playing DVR recording: {dvr_entry.get('disp_title', 'Unknown')} (UUID: {dvr_uuid})")
+
+            # Store current DVR entry for download functionality
+            self.current_dvr_entry = dvr_entry
+
+            # Extract recording duration from DVR entry metadata
+            self.recording_duration = dvr_entry.get('duration', 0)  # Duration in seconds
+
+            # Fallback: Calculate from start/stop timestamps if duration not available
+            if self.recording_duration == 0:
+                start = dvr_entry.get('start', 0)
+                stop = dvr_entry.get('stop', 0)
+                if start > 0 and stop > 0:
+                    self.recording_duration = stop - start
+                    print(f"Debug: Calculated duration from start/stop: {self.recording_duration}s")
+
+            print(f"Debug: Recording duration from metadata: {self.recording_duration}s ({format_duration(self.recording_duration)})")
+
+            # Create auth string if credentials exist
+            auth_string = ''
+            if server.get('username') or server.get('password'):
+                auth_string = f"{server.get('username', '')}:{server.get('password', '')}@"
+
+            # Ensure server_url starts with http:// or https://
+            if not server_url.startswith(('http://', 'https://')):
+                server_url = f'http://{server_url}'
+
+            # Create DVR stream URL
+            if auth_string:
+                stream_url = server_url.replace('://', f'://{auth_string}')
+                stream_url = f'{stream_url}/dvrfile/{dvr_uuid}'
+            else:
+                stream_url = f'{server_url}/dvrfile/{dvr_uuid}'
+
+            print(f"Debug: DVR Stream URL: {stream_url}")
+
+            # Check if external VLC is enabled
+            use_external = self.config.get('use_external_vlc', False)
+
+            if use_external:
+                # External VLC mode
+                vlc_binary = self.find_vlc_binary()
+
+                if not vlc_binary:
+                    QMessageBox.critical(
+                        self,
+                        "VLC Not Found",
+                        "VLC media player not found on your system.\n\n"
+                        "Please install VLC or switch to internal player mode in Settings → Playback Mode."
+                    )
+                    return
+
+                try:
+                    # Create M3U playlist for DVR recording
+                    channel_name = dvr_entry.get('channelname', 'Unknown Channel')
+                    program_title = dvr_entry.get('disp_title', 'Recording')
+
+                    # Create temporary M3U file
+                    temp_file = tempfile.NamedTemporaryFile(
+                        mode='w',
+                        prefix='tvhplayer_dvr_',
+                        suffix='.m3u',
+                        delete=False,
+                        encoding='utf-8'
+                    )
+
+                    with temp_file:
+                        # M3U header
+                        temp_file.write("#EXTM3U\n")
+
+                        # EXTINF line with channel and program info
+                        temp_file.write(f"#EXTINF:-1,{channel_name} - {program_title}\n")
+
+                        # User-Agent header
+                        temp_file.write(f"#EXTVLCOPT:http-user-agent={USER_AGENT}\n")
+
+                        # Stream URL with embedded credentials
+                        temp_file.write(f"{stream_url}\n")
+
+                    playlist_path = temp_file.name
+                    self.temp_m3u_files.append(playlist_path)
+
+                    # Launch external VLC
+                    subprocess.Popen([vlc_binary, playlist_path])
+                    print(f"Debug: Opened DVR recording in external VLC: {vlc_binary}")
+                    self.statusbar.showMessage(f"Playing recording in external VLC: {program_title}")
+
+                    # Schedule cleanup
+                    QTimer.singleShot(5000, lambda: self.cleanup_temp_file(playlist_path))
+
+                except Exception as e:
+                    QMessageBox.critical(
+                        self,
+                        "VLC Launch Error",
+                        f"Failed to launch external VLC:\n{str(e)}"
+                    )
+                    print(f"Debug: Error launching external VLC: {str(e)}")
+            else:
+                # Internal VLC mode
+                media = self.instance.media_new(stream_url)
+                if not media:
+                    raise RuntimeError("Failed to create VLC media object")
+
+                self.media_player.set_media(media)
+                play_result = self.media_player.play()
+
+                if play_result == -1:
+                    raise RuntimeError("VLC play() returned error (-1)")
+
+                program_title = dvr_entry.get('disp_title', 'Recording')
+                print(f"Debug: Started DVR playback (play() returned {play_result})")
+                self.statusbar.showMessage(f"Playing recording: {program_title}")
+
+                # Hide logo during video playback
+                if hasattr(self, 'logo_label'):
+                    self.logo_label.hide()
+
+                # Enable DVR playback mode - show seek bar and start position updates
+                self.is_playing_recording = True
+                self.show_seek_bar()
+
+                # Disable recording buttons during DVR playback
+                self.update_recording_buttons_state()
+
+                # Delay timer start by 2 seconds to give VLC time to load metadata
+                print("Debug: Waiting 2 seconds before starting seek bar updates (VLC metadata loading)...")
+                QTimer.singleShot(2000, lambda: self.seek_update_timer.start(500) if self.is_playing_recording else None)
+
+        except Exception as e:
+            print(f"Debug: Error playing DVR recording: {str(e)}")
+            print(f"Debug: Traceback: {traceback.format_exc()}")
+            self.statusbar.showMessage(f"DVR playback error: {str(e)}")
+            QMessageBox.warning(
+                self,
+                "Playback Error",
+                f"Failed to play DVR recording:\n{str(e)}"
+            )
 
     def show_server_status(self):
         """Show server status dialog"""
@@ -4439,7 +5362,7 @@ class TVHeadendClient(QMainWindow):
         if row is None:
             print(f"Debug EPG: Could not find row for channel '{channel_name}' (UUID: {channel_uuid})")
             # Schedule next channel
-            QTimer.singleShot(20, self.update_next_epg)
+            QTimer.singleShot(ASYNC_EPG_UPDATE_DELAY_MS, self.update_next_epg)
             return
 
         # Get server and auth
@@ -4462,14 +5385,14 @@ class TVHeadendClient(QMainWindow):
 
             if response.status_code != 200:
                 # Schedule next channel
-                QTimer.singleShot(20, self.update_next_epg)
+                QTimer.singleShot(ASYNC_EPG_UPDATE_DELAY_MS, self.update_next_epg)
                 return
 
             epg_entries = response.json().get('entries', [])
 
             if not epg_entries:
                 # Schedule next channel
-                QTimer.singleShot(20, self.update_next_epg)
+                QTimer.singleShot(ASYNC_EPG_UPDATE_DELAY_MS, self.update_next_epg)
                 return
 
             # Sort by start time
@@ -4538,7 +5461,7 @@ class TVHeadendClient(QMainWindow):
             traceback.print_exc()
 
         # Schedule next channel update (non-blocking)
-        QTimer.singleShot(20, self.update_next_epg)
+        QTimer.singleShot(ASYNC_EPG_UPDATE_DELAY_MS, self.update_next_epg)
 
     def get_epg_title(self, epg_entry):
         """Extract title from EPG entry (handles both dict and string formats)"""
@@ -4647,7 +5570,7 @@ class TVHeadendClient(QMainWindow):
         self.load_channel_icon(row, col, icon_url, server, from_cache_only=False)
 
         # Schedule next download with small delay (non-blocking)
-        QTimer.singleShot(50, self.download_next_icon)
+        QTimer.singleShot(ASYNC_ICON_DOWNLOAD_DELAY_MS, self.download_next_icon)
 
     def start_epg_update_timer(self):
         """Start timer for automatic EPG updates"""
