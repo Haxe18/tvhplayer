@@ -77,7 +77,10 @@ Choose the installer for your operating system from the [releases](https://githu
 - Make sure both digest and plain authentication are enabled in your TVHeadend server
 
 **System Dependencies:**
-- **VLC media player** - Required for video playback (bundled in installers, or install separately)
+- **VLC media player** - Required for video playback (uses system-installed VLC, not bundled)
+  - Windows: Download from [videolan.org](https://www.videolan.org/vlc/)
+  - macOS: Download from [videolan.org](https://www.videolan.org/vlc/) or install via Homebrew: `brew install --cask vlc`
+  - Linux: Install via package manager: `sudo apt install vlc`
 - **FFMPEG** (optional) - Only needed for local recording feature
   - Windows: Follow [this guide](https://phoenixnap.com/kb/ffmpeg-windows) to add ffmpeg to PATH, or place `ffmpeg.exe` in the same directory as tvhplayer
   - macOS: Install via Homebrew: `brew install ffmpeg`
@@ -107,18 +110,30 @@ To do this:
 - Uses python-vlc bindings for video playback with hardware acceleration
 - TVHeadend HTTP REST API integration (no HTSP support)
 - Dynamic theme system with QPalette + QSS stylesheets for cross-platform dark mode
+- **Centralized version management**: Single source of truth in `tvhplayer/__version__.py`
+  - Used by application code, setup.py, and all build scripts
+  - Eliminates version duplication and sync issues
 
 **Build System:**
 - Automated builds via GitHub Actions for all platforms
 - PyInstaller used for bundling with platform-specific `.spec` files
+- **Dynamic version management**:
+  - Application version defined in `tvhplayer/__version__.py` (single source of truth)
+  - Build artifacts use `VERSION` environment variable from Git tags/workflow
+  - `.spec` files read VERSION env var for Info.plist/metadata (fallback: `1.0.0`)
+  - Automatic `v` prefix removal (e.g., `v4.0.1` → `4.0.1`)
 - Windows: Inno Setup installer with modern UI, filtered Qt6 DLLs, --onedir mode
+  - Uses system-installed VLC (not bundled) to save ~133 MB
+  - Filtered Qt6 DLLs exclude unused modules (QML, QtQuick, OpenGL SW renderer) - saves ~40-60 MB
   - Automatic config migration from v3.5 (`~/.tvhplayer.conf` → `%APPDATA%/TVHplayer/tvhplayer.conf`)
   - Default recordings saved to Videos folder (`%USERPROFILE%/Videos`)
 - macOS: DMG installers for Intel (macos-14) and Apple Silicon (macos-15)
+  - Uses system-installed VLC (not bundled) to save ~133 MB
+  - PyQt6 optimizations: QML/QtQuick excluded, unused modules filtered - saves ~40-60 MB
+  - App bundle with Info.plist containing dynamic version info
 - Linux: Debian package (.deb) with dynamic version handling
 - Parallel builds with `fail-fast: false` to ensure all platforms complete
-- Dynamic version management from Git workflow
-- Optimized with caching: pip dependencies, Homebrew, Chocolatey, APT packages
+- Optimized with caching: pip dependencies, Homebrew, Chocolatey packages
 
 **Performance & Optimization:**
 - Optimized HTTP requests with connection pooling and custom User-Agent

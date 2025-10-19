@@ -18,24 +18,41 @@ python3 tvhplayer/tvhplayer.py
 
 Each platform has its own `.spec` file for consistent, reproducible builds:
 
+**Centralized Version Management:**
+Version is defined in a single location: `tvhplayer/__version__.py`
+```python
+__version__ = "4.0.1"
+```
+- **Application code** (`tvhplayer.py`): Imports and uses `__version__` for USER_AGENT and About dialog
+- **setup.py**: Reads `__version__` from file for package metadata
+- **Build artifacts** (`.spec` files): Read `VERSION` environment variable for installer metadata
+  - GitHub Actions sets VERSION from Git tags
+  - Automatic `v` prefix removal (e.g., `v4.0.1` → `4.0.1`)
+  - Fallback to `1.0.0` for local builds without environment variable
+- **Single source of truth**: Update version in one place (`__version__.py`)
+
 **Windows:**
 ```bash
+export VERSION="4.0.1"  # Or from Git tag
 pyinstaller windows/tvhplayer.spec
 ```
 - Creates `dist/tvhplayer/` directory with all files (--onedir mode)
 - Inno Setup installer with modern UI creates final .exe installer
-- Filtered Qt6 DLLs to reduce size (excludes unused modules like QML, QtQuick, OpenGL SW renderer)
+- Filtered Qt6 DLLs to reduce size (excludes unused modules like QML, QtQuick, OpenGL SW renderer) - saves ~40-60 MB
 - Bundles Qt platform plugins to prevent "Qt platform plugin could not be initialised" error
 - Uses system-installed VLC (not bundled) to save ~133 MB
 - Icon: `icons/tvhplayer.ico`
 
 **macOS:**
 ```bash
+export VERSION="4.0.1"  # Or from Git tag
 pyinstaller macos/tvhplayer.spec
 ```
 - Creates `dist/TVHplayer.app` bundle
 - DMG installers for Intel (macos-14, x86_64) and Apple Silicon (macos-15, arm64)
-- Includes VLC plugins from `/Applications/VLC.app` or Homebrew installation
+- Uses system-installed VLC (not bundled) to save ~133 MB
+- PyQt6 optimizations: Filtered data files and binaries (excludes QML, QtQuick, unused modules) - saves ~40-60 MB
+- Dynamic version in Info.plist (`CFBundleVersion` and `CFBundleShortVersionString`)
 - Icon: `icons/tvhplayer.png` (modern PNG format, .icns deprecated)
 
 **Linux:**
@@ -97,17 +114,28 @@ Automated builds run via `.github/workflows/build.yml`:
    - Example: `repo_root = os.path.dirname(SPECPATH)`
    - Both `windows/tvhplayer.spec` and `macos/tvhplayer.spec` now use this correct pattern
 
-3. **Linux: "can't parse dependency" or "parsing package Depends field"**
+3. **Windows/macOS: Version shows as "1.0.0" instead of expected version**
+   - **Cause**: `VERSION` environment variable not set before PyInstaller build
+   - **Fix**: Export `VERSION` before running PyInstaller
+   - Example: `export VERSION="4.0.1" && pyinstaller macos/tvhplayer.spec`
+   - GitHub Actions automatically sets this from Git tags
+
+4. **macOS: VLC playback fails or "libvlc not found"**
+   - **Cause**: VLC not installed on system (plugins no longer bundled)
+   - **Fix**: Install VLC from [videolan.org](https://www.videolan.org/vlc/) or via Homebrew: `brew install --cask vlc`
+   - VLC must be installed at `/Applications/VLC.app` or via Homebrew
+
+5. **Linux: "can't parse dependency" or "parsing package Depends field"**
    - **Cause**: Missing commas or incorrect formatting in `debian/control`
    - **Fix**: Ensure all dependencies are comma-separated on single lines
    - **Required dependencies**: `python3-pyqt6`, `python3-vlc`, `python3-requests`, `python3-dateutil`, `vlc`
 
-4. **Linux: "Unmet build dependencies: build-essential"**
+6. **Linux: "Unmet build dependencies: build-essential"**
    - **Cause**: Missing build tools for dpkg-buildpackage
    - **Fix**: Install `build-essential` before running dpkg-buildpackage
    - Full list: `build-essential`, `debhelper`, `dh-python`, `python3-all`, `python3-setuptools`
 
-5. **All platforms: "no files found matching 'icons/*'"**
+7. **All platforms: "no files found matching 'icons/*'"**
    - **Cause**: Incorrect path in `MANIFEST.in`
    - **Fix**: Icons are in `icons/` not `tvhplayer/icons/`
    - Correct: `include icons/*`
@@ -117,6 +145,7 @@ Automated builds run via `.github/workflows/build.yml`:
 - Verify `.spec` file paths are relative to repository root, not spec file location
 - Test installers on clean systems without development dependencies
 - Use `fail-fast: false` in CI to get build logs from all platforms
+- Verify `VERSION` environment variable is set correctly in build scripts
 
 ## Architecture
 

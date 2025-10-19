@@ -1,8 +1,15 @@
 from setuptools import setup, find_packages
+import os
+
+# Read version from __version__.py
+version = {}
+version_file = os.path.join(os.path.dirname(__file__), 'tvhplayer', '__version__.py')
+with open(version_file) as f:
+    exec(f.read(), version)
 
 setup(
     name="tvhplayer",
-    version="4.0.0",
+    version=version['__version__'],
     description="Desktop client for TVHeadend",
     author="mFat",
     author_email="mah.fat@gmail.com",

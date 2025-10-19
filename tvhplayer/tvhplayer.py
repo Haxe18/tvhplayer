@@ -15,6 +15,14 @@ from pathlib import Path
 
 import requests
 import vlc
+
+# Import version from centralized location
+# Flexible import for both direct execution and package import
+try:
+    from .__version__ import __version__
+except ImportError:
+    # Direct execution fallback
+    from __version__ import __version__
 from PyQt6.QtCore import (QEasingCurve, QEvent, QPropertyAnimation, QSize, Qt,
                           QTimer)
 from PyQt6.QtGui import (QAction, QColor, QFont, QIcon, QKeySequence, QPalette,
@@ -518,7 +526,7 @@ except ImportError:
     PSUTIL_AVAILABLE = False
 
 # User-Agent for API requests
-USER_AGENT = "TVHplayer/4.0 (https://github.com/mfat/tvhplayer)"
+USER_AGENT = f"TVHplayer/{__version__} (https://github.com/mfat/tvhplayer)"
 
 # Global session for all HTTP requests (connection pooling + User-Agent)
 session = requests.Session()
@@ -2967,7 +2975,7 @@ class TVHeadendClient(QMainWindow):
                 f.write("#EXTM3U\n")
 
                 # User-Agent for server identification
-                f.write("#EXTVLCOPT:http-user-agent=TVHplayer/4.0 (https://github.com/mfat/tvhplayer)\n")
+                f.write(f"#EXTVLCOPT:http-user-agent={USER_AGENT}\n")
 
                 # Note: Credentials are embedded in stream URL (not via EXTVLCOPT)
                 # VLC ignores EXTVLCOPT:http-password for security reasons
@@ -3416,7 +3424,7 @@ class TVHeadendClient(QMainWindow):
         about_text = (
             "<div style='text-align: center;'>"
             "<h2>TVHplayer</h2>"
-            "<p>Version 4.0</p>"
+            f"<p>Version {__version__}</p>"
             "<p>A powerful and user-friendly TVHeadend client application.</p>"
             "<p style='margin-top: 20px;'><b>Created by:</b><br>mFat</p>"
             "<p style='margin-top: 20px;'><b>Built with:</b><br>"

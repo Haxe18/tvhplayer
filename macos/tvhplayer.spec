@@ -2,11 +2,18 @@
 import sys
 import os
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 # SPECPATH is the directory containing this .spec file (macos/)
 # Repository root is one level up
 repo_root = os.path.dirname(SPECPATH)
 project_dir = os.path.join(repo_root, 'tvhplayer')
+
+# Get version from environment variable (set by CI/CD or manually)
+VERSION = os.environ.get('VERSION', '1.0.0')
+# Remove 'v' prefix if present (e.g., v4.0.1 -> 4.0.1)
+if VERSION.startswith('v'):
+    VERSION = VERSION[1:]
 
 # Define paths relative to repository root
 icons_dir = os.path.join(repo_root, 'icons')
@@ -18,13 +25,18 @@ if os.path.exists(icons_dir):
         if file.endswith(('.svg', '.png', '.ico')):
             icon_files.append((os.path.join(icons_dir, file), 'icons'))
 
-block_cipher = None
+# Collect PyQt6 data files and binaries
+# Filter out unnecessary data to reduce size
+pyqt6_datas = collect_data_files('PyQt6', include_py_files=False)
+# Exclude QML/QtQuick files (not used, saves ~15 MB)
+pyqt6_datas = [(src, dst) for src, dst in pyqt6_datas if 'qml' not in src.lower()]
+pyqt6_binaries = collect_dynamic_libs('PyQt6')
 
 a = Analysis(
     [os.path.join(repo_root, 'tvhplayer', 'tvhplayer.py')],
     pathex=[project_dir],
-    binaries=[],
-    datas=icon_files,
+    binaries=pyqt6_binaries,
+    datas=icon_files + pyqt6_datas,
     hiddenimports=[
         'vlc',
         'PyQt6',
@@ -35,39 +47,45 @@ a = Analysis(
         'requests',
         'certifi'
     ],
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
+    excludes=[
+        # Exclude unnecessary PyQt6 modules
+        'PyQt6.QtNetwork',
+        'PyQt6.QtDBus',
+        'PyQt6.QtSql',
+        'PyQt6.QtTest',
+        'PyQt6.QtXml',
+        'PyQt6.QtBluetooth',
+        'PyQt6.QtMultimedia',
+        'PyQt6.QtWebEngine',
+        'PyQt6.QtWebEngineCore',
+        'PyQt6.QtWebEngineWidgets',
+        'PyQt6.QtWebSockets',
+        'PyQt6.QtPositioning',
+        'PyQt6.QtSensors',
+        'PyQt6.QtSerialPort',
+        'PyQt6.QtPrintSupport',
+        'PyQt6.QtDesigner',
+        'PyQt6.QtHelp',
+        'PyQt6.QtOpenGL',
+        'PyQt6.QtQml',
+        'PyQt6.QtQuick',
+        # Exclude unnecessary Python modules
+        'unittest',
+        'doctest',
+        'pdb',
+        'pydoc',
+        'http.server',
+        'sqlite3',
+        'test',
+    ],
     noarchive=False,
 )
 
-# Improve VLC plugin handling for macOS
-if sys.platform == 'darwin':
-    vlc_locations = [
-        '/Applications/VLC.app/Contents/MacOS/plugins',
-        '/usr/local/lib/vlc/plugins',  # Homebrew installation
-        str(Path.home() / 'Applications/VLC.app/Contents/MacOS/plugins')  # User installation
-    ]
-    
-    for vlc_plugin_path in vlc_locations:
-        if os.path.exists(vlc_plugin_path):
-            for root, dirs, files in os.walk(vlc_plugin_path):
-                for file in files:
-                    if file.endswith(('.dylib', '.so')):  # Only include binary plugins
-                        full_path = os.path.join(root, file)
-                        rel_path = os.path.relpath(full_path, vlc_plugin_path)
-                        a.binaries.append((
-                            os.path.join('vlc', 'plugins', rel_path),
-                            full_path,
-                            'BINARY'
-                        ))
-            break  # Stop after finding first valid VLC installation
+# Note: VLC plugins are NOT bundled to save ~133 MB (like Windows)
+# The application will use the system-installed VLC
+# Users need VLC installed on their system for video playback to work
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure, a.zipped_data)
 
 exe = EXE(
     pyz,
@@ -91,15 +109,15 @@ exe = EXE(
 app = BUNDLE(
     exe,
     name='TVHplayer.app',
-    icon='icons/tvhplayer.png',
+    icon=os.path.join(repo_root, 'icons', 'tvhplayer.png'),
     bundle_identifier='com.tvhplayer.app',
     info_plist={
         'CFBundleName': 'TVHplayer',
         'CFBundleDisplayName': 'TVHplayer',
         'CFBundleGetInfoString': "TVHplayer",
         'CFBundleIdentifier': "com.tvhplayer.app",
-        'CFBundleVersion': "4.0.0",
-        'CFBundleShortVersionString': "4.0.0",
+        'CFBundleVersion': VERSION,
+        'CFBundleShortVersionString': VERSION,
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '10.13.0',
         'NSRequiresAquaSystemAppearance': False,

@@ -77,6 +77,7 @@ jobs:
       - name: Build macOS app bundle
         if: runner.os == 'macOS'
         run: |
+          export VERSION="${{ env.VERSION }}"
           pyinstaller macos/tvhplayer.spec
 
       - name: Cache Homebrew packages
