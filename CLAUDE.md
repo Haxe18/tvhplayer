@@ -160,7 +160,8 @@ Automated builds run via `.github/workflows/build.yml`:
   - Handles all UI, server connections, playback, and recordings
   - Initializes VLC with hardware acceleration support
   - Platform-specific configuration paths (macOS: ~/Library/Application Support, Windows: %APPDATA%, Linux: ~/.config)
-  - Implements persistent UI state (column widths, splitter position, sort order)
+  - Implements persistent UI state (column widths, splitter position, sort order, volume level)
+  - **Volume persistence**: Volume loaded from config on startup (~line 2211), saved on every change (~line 2924)
 
 - **`Logger`** (line 38): Application logging system
   - Logs to `~/.tvhplayer/logs/tvhplayer_<timestamp>.log`
@@ -263,12 +264,43 @@ The app communicates with TVHeadend via HTTP REST API (no HTSP support). Common 
 
 ### Video Playback
 
-- **VLC integration**: Uses `python-vlc` bindings with hardware acceleration
+**Playback Modes:**
+- **Internal VLC Player** (default): Embedded player using `python-vlc` bindings
+- **External VLC Player** (optional): Opens streams in separate VLC window
+  - Configurable via Settings → Playback Mode
+  - Preference stored in config: `use_external_vlc` (default: False)
+
+**Internal VLC integration:**
+- Uses `python-vlc` bindings with hardware acceleration
 - **Platform-specific window handles**:
   - Linux: `set_xwindow()`
   - Windows: `set_hwnd()`
   - macOS: `set_nsobject()`
 - Hardware decoding configured with `--avcodec-hw=any` flag
+- Playback controls: mute, volume, fullscreen (active in internal mode only)
+
+**External VLC integration:**
+- **M3U Playlist approach**: Creates temporary `.m3u` files for secure credential handling
+- **find_vlc_binary()** (~line 2874): Platform-specific VLC detection
+  - Windows: `shutil.which('vlc')` + common install paths (`C:\Program Files\VideoLAN\VLC\vlc.exe`)
+  - macOS: `/Applications/VLC.app/Contents/MacOS/VLC` + Homebrew fallback
+  - Linux: `shutil.which('vlc')`
+- **create_vlc_playlist()** (~line 2923): Generates temporary M3U files
+  - M3U format with `#EXTINF` tags (channel name + current program)
+  - Credentials embedded in URL: `http://user:pass@server/stream/channel/uuid`
+  - User-Agent header: `TVHplayer/4.0 (https://github.com/mfat/tvhplayer)`
+  - Temp files: `tempfile.NamedTemporaryFile(prefix='tvhplayer_', suffix='.m3u')`
+- **Cleanup strategy**: Double approach for robustness
+  - Delayed cleanup: 5 seconds after VLC launch (via `QTimer.singleShot`)
+  - Backup cleanup: All remaining temp files deleted in `closeEvent()`
+  - Tracked in `self.temp_m3u_files` list
+- **Security note**: Credentials visible in M3U file temporarily (5s) and via process tools
+  - VLC ignores `#EXTVLCOPT:http-password` for security reasons, requiring URL embedding
+  - Acceptable for single-user desktop systems (main use case)
+  - Multi-user systems should use internal player
+- **UI adaptation**: Right panel (video player + controls) hidden when external mode active
+  - `update_playback_controls_state()` manages visibility and control states
+  - Channel list uses full window width in external mode
 
 ### Local Recording
 
@@ -304,6 +336,8 @@ Uses FFMPEG subprocess for local recording feature. Requires ffmpeg in PATH or s
 - UI state persistence:
   - `theme_mode`: Theme preference ('auto', 'light', 'dark') - default: 'auto'
   - `icon_size`: Channel icon size (48-100px)
+  - `volume`: VLC player volume level (0-100, default: 50) - saved on every change
+  - `use_external_vlc`: Playback mode (False=internal, True=external) - default: False
   - `channel_column_width`: Width of channel name column (default: 80px)
   - `current_program_width`: Width of current program column (default: 300px)
   - `next_program_width`: Width of next program column (default: 300px)

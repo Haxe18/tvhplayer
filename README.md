@@ -15,6 +15,9 @@ A TVheadend client for watching and recording live TV on PC
 
 With TVHplayer you can:
 - Play live TV & radio channels
+  - **Internal player**: Embedded VLC player with full controls (default)
+  - **External player**: Open streams in separate VLC window (Settings → Playback Mode)
+  - Automatic VLC detection on Windows, macOS, and Linux
 - Browse EPG with live progress bars showing current and upcoming programs
   - Robust EPG handling with automatic recovery for missing UI elements
   - Asynchronous updates keep UI responsive even with many channels
@@ -28,9 +31,10 @@ With TVHplayer you can:
   - Three modes: Auto (follow system), Light Mode, Dark Mode
   - Theme-aware UI components with optimized color schemes
   - Windows-compatible QSS stylesheets for native widgets
-- Persistent UI state - your column widths, sort order, and window layout are remembered
+- Persistent UI state - your column widths, sort order, volume level, playback mode, and window layout are remembered
   - Debounced saving prevents excessive disk writes during resizing operations
   - Server selection persists between sessions
+  - Volume level and playback mode automatically restored on startup
 - Natural/human sorting for channel names (e.g., "Channel 1, 2, 10" not "1, 10, 2")
   - Channels without numbers sort before numbered variants (e.g., "Channel HD" before "Channel 1 HD")
 - Per-server icon caching for fast switching between multiple TVHeadend servers

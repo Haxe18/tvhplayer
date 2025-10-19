@@ -1646,6 +1646,65 @@ class SettingsDialog(QDialog):
         else:  # Custom
             return self.custom_icon_size.value()
 
+class PlaybackDialog(QDialog):
+    """Dialog for selecting playback mode (internal vs external VLC)"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent_window = parent
+        self.setWindowTitle("Playback Mode")
+        self.setModal(True)
+        self.resize(400, 200)
+        self.setup_ui()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+
+        # Playback mode group
+        playback_group = QGroupBox("VLC Player Mode")
+        playback_layout = QVBoxLayout()
+
+        # Radio buttons
+        self.internal_radio = QRadioButton("Internal VLC Player")
+        self.internal_radio.setToolTip("Play streams in TVHplayer's built-in player")
+        self.external_radio = QRadioButton("External VLC Player")
+        self.external_radio.setToolTip("Open streams in a separate VLC window")
+
+        playback_layout.addWidget(self.internal_radio)
+        playback_layout.addWidget(self.external_radio)
+
+        playback_group.setLayout(playback_layout)
+        layout.addWidget(playback_group)
+
+        # Load current setting
+        self.load_current_setting()
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        ok_btn = QPushButton("OK")
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addStretch()
+        button_layout.addWidget(ok_btn)
+        button_layout.addWidget(cancel_btn)
+        layout.addLayout(button_layout)
+
+    def load_current_setting(self):
+        """Load current playback mode from config"""
+        if not self.parent_window:
+            self.internal_radio.setChecked(True)
+            return
+
+        use_external = self.parent_window.config.get('use_external_vlc', False)
+        if use_external:
+            self.external_radio.setChecked(True)
+        else:
+            self.internal_radio.setChecked(True)
+
+    def get_use_external_vlc(self):
+        """Return True if external VLC is selected"""
+        return self.external_radio.isChecked()
+
 class TVHeadendClient(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1735,6 +1794,9 @@ class TVHeadendClient(QMainWindow):
         self.splitter_timer.setSingleShot(True)
         self.splitter_timer.timeout.connect(self.save_splitter_sizes)
         self.pending_splitter_sizes = None
+
+        # Track temporary M3U playlist files for cleanup
+        self.temp_m3u_files = []
 
         # Initialize VLC with basic instance first
         print("Debug: Initializing VLC instance")
@@ -1908,7 +1970,6 @@ class TVHeadendClient(QMainWindow):
 
         # Create menu bar
         menubar = self.menuBar()
-        file_menu = menubar.addMenu("File")
         view_menu = menubar.addMenu("View")
         settings_menu = menubar.addMenu("Settings")
         help_menu = menubar.addMenu("Help")
@@ -1946,6 +2007,11 @@ class TVHeadendClient(QMainWindow):
         clear_cache_action.triggered.connect(self.clear_icon_cache)
         settings_menu.addAction(clear_cache_action)
 
+        # Add Playback Mode action to Settings menu
+        playback_mode_action = QAction("Playback Mode", self)
+        playback_mode_action.triggered.connect(self.show_playback_mode)
+        settings_menu.addAction(playback_mode_action)
+
         # Add separator before reset option
         settings_menu.addSeparator()
 
@@ -1954,14 +2020,17 @@ class TVHeadendClient(QMainWindow):
         reset_action.triggered.connect(self.reset_to_defaults)
         settings_menu.addAction(reset_action)
 
-        # Create actions
+        # Add separator before Exit option
+        settings_menu.addSeparator()
+
+        # Add Exit action to Settings menu
         exit_action = QAction("Exit", self)
         if sys.platform == "darwin":  # macOS
             exit_action.setShortcut("Cmd+Q")
         else:  # Windows/Linux
             exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
+        settings_menu.addAction(exit_action)
 
         # Create main widget and layout
         main_widget = QWidget()
@@ -2077,10 +2146,10 @@ class TVHeadendClient(QMainWindow):
         left_layout.addWidget(QLabel(""))
         left_layout.addWidget(self.channel_list)
 
-        # Right pane
-        right_pane = QFrame()
-        right_pane.setFrameStyle(QFrame.Shape.Panel | QFrame.Shadow.Raised)
-        right_layout = QVBoxLayout(right_pane)
+        # Right pane (make instance variable for show/hide control)
+        self.right_pane = QFrame()
+        self.right_pane.setFrameStyle(QFrame.Shape.Panel | QFrame.Shadow.Raised)
+        right_layout = QVBoxLayout(self.right_pane)
         right_layout.setObjectName("right_layout")
 
         # VLC player widget
@@ -2207,28 +2276,35 @@ class TVHeadendClient(QMainWindow):
 
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setRange(0, 100)
-        self.volume_slider.setValue(50)
+        # Load saved volume from config (default: 50)
+        saved_volume = self.config.get('volume', 50)
+        self.volume_slider.setValue(saved_volume)
         self.volume_slider.setFixedWidth(150)  # Set fixed width to make slider less wide
         self.volume_slider.valueChanged.connect(self.on_volume_changed)
+        # Apply saved volume to VLC player
+        self.media_player.audio_set_volume(saved_volume)
 
         # Fullscreen button with icon
-        fullscreen_btn = QPushButton()
-        fullscreen_btn.setIcon(QIcon(f"{self.icons_dir}/fullscreen.svg"))
-        fullscreen_btn.setIconSize(QSize(32, 32))
-        fullscreen_btn.setFixedSize(32, 32)  # Remove extra parenthesis
-        fullscreen_btn.clicked.connect(self.toggle_fullscreen)
-        fullscreen_btn.setToolTip("Toggle Fullscreen")
-        fullscreen_btn.setStyleSheet("QPushButton { border: none; }")
+        self.fullscreen_btn = QPushButton()
+        self.fullscreen_btn.setIcon(QIcon(f"{self.icons_dir}/fullscreen.svg"))
+        self.fullscreen_btn.setIconSize(QSize(32, 32))
+        self.fullscreen_btn.setFixedSize(32, 32)  # Remove extra parenthesis
+        self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
+        self.fullscreen_btn.setToolTip("Toggle Fullscreen")
+        self.fullscreen_btn.setStyleSheet("QPushButton { border: none; }")
 
         controls_layout.addStretch()  # Add stretch to push widgets to the right
         controls_layout.addWidget(self.mute_btn)
         controls_layout.addWidget(self.volume_slider)
-        controls_layout.addWidget(fullscreen_btn)
+        controls_layout.addWidget(self.fullscreen_btn)
         right_layout.addLayout(controls_layout)
+
+        # Update playback controls state based on config (after all controls are created)
+        self.update_playback_controls_state()
 
         # Add panes to splitter instead of layout
         self.splitter.addWidget(left_pane)
-        self.splitter.addWidget(right_pane)
+        self.splitter.addWidget(self.right_pane)
 
         # Restore saved splitter sizes or use defaults
         saved_sizes = self.config.get('splitter_sizes', [300, 900])
@@ -2801,6 +2877,143 @@ class TVHeadendClient(QMainWindow):
             print(f"Debug: Error saving config: {str(e)}")
             traceback.print_exc()
 
+    def find_vlc_binary(self):
+        """
+        Find VLC binary path for external playback.
+
+        Returns:
+            str: Path to VLC binary if found, None otherwise
+        """
+        import shutil
+
+        if sys.platform == 'win32':
+            # Windows: Try shutil.which first, then common install paths
+            vlc_path = shutil.which('vlc')
+            if vlc_path:
+                return vlc_path
+
+            # Try common Windows installation paths
+            common_paths = [
+                r'C:\Program Files\VideoLAN\VLC\vlc.exe',
+                r'C:\Program Files (x86)\VideoLAN\VLC\vlc.exe',
+            ]
+            for path in common_paths:
+                if os.path.exists(path):
+                    return path
+
+        elif sys.platform == 'darwin':
+            # macOS: Check standard VLC.app location
+            vlc_app = '/Applications/VLC.app/Contents/MacOS/VLC'
+            if os.path.exists(vlc_app):
+                return vlc_app
+
+            # Try shutil.which as fallback (if installed via Homebrew)
+            vlc_path = shutil.which('vlc')
+            if vlc_path:
+                return vlc_path
+
+        else:
+            # Linux: Use shutil.which
+            vlc_path = shutil.which('vlc')
+            if vlc_path:
+                return vlc_path
+
+        return None
+
+    def create_vlc_playlist(self, server_url, channel_uuid, username='', password='', channel_name='', current_program=''):
+        """
+        Create a temporary M3U playlist file for VLC with authentication.
+        This keeps credentials out of the process list for security.
+
+        Args:
+            server_url (str): Clean server URL without credentials
+            channel_uuid (str): Channel UUID
+            username (str): Optional username for HTTP auth
+            password (str): Optional password for HTTP auth
+            channel_name (str): Optional channel name for EXTINF tag
+            current_program (str): Optional current program title for EXTINF tag
+
+        Returns:
+            str: Path to temporary M3U file
+        """
+        import tempfile
+
+        try:
+            # Ensure server_url has protocol
+            if not server_url.startswith(('http://', 'https://')):
+                server_url = f'http://{server_url}'
+
+            # Build stream URL with embedded credentials if provided
+            # (VLC ignores #EXTVLCOPT:http-password for security reasons, so we embed in URL)
+            if username or password:
+                # Extract protocol and rest of URL
+                if '://' in server_url:
+                    protocol, rest = server_url.split('://', 1)
+                    stream_url = f'{protocol}://{username}:{password}@{rest}/stream/channel/{channel_uuid}'
+                else:
+                    stream_url = f'http://{username}:{password}@{server_url}/stream/channel/{channel_uuid}'
+            else:
+                stream_url = f'{server_url}/stream/channel/{channel_uuid}'
+
+            # Create temporary M3U file
+            with tempfile.NamedTemporaryFile(
+                mode='w',
+                suffix='.m3u',
+                delete=False,
+                encoding='utf-8',
+                prefix='tvhplayer_'
+            ) as f:
+                # M3U header
+                f.write("#EXTM3U\n")
+
+                # User-Agent for server identification
+                f.write("#EXTVLCOPT:http-user-agent=TVHplayer/4.0 (https://github.com/mfat/tvhplayer)\n")
+
+                # Note: Credentials are embedded in stream URL (not via EXTVLCOPT)
+                # VLC ignores EXTVLCOPT:http-password for security reasons
+
+                # EXTINF tag with channel name and current program info
+                if channel_name or current_program:
+                    extinf_line = "#EXTINF:-1"
+                    if channel_name and current_program:
+                        extinf_line += f",{channel_name} - {current_program}"
+                    elif channel_name:
+                        extinf_line += f",{channel_name}"
+                    else:
+                        extinf_line += f",{current_program}"
+                    f.write(extinf_line + "\n")
+
+                # Clean stream URL (credentials are in EXTVLCOPT lines above)
+                f.write(f"{stream_url}\n")
+
+                temp_path = f.name
+
+            print(f"Debug: Created M3U playlist: {temp_path}")
+            return temp_path
+
+        except Exception as e:
+            print(f"Debug: Error creating M3U playlist: {str(e)}")
+            raise
+
+    def cleanup_temp_file(self, file_path):
+        """
+        Clean up temporary M3U playlist file.
+
+        Args:
+            file_path (str): Path to temporary file to delete
+        """
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                print(f"Debug: Deleted temp M3U file: {file_path}")
+
+            # Remove from tracking list
+            if file_path in self.temp_m3u_files:
+                self.temp_m3u_files.remove(file_path)
+
+        except Exception as e:
+            print(f"Debug: Error cleaning up temp file {file_path}: {str(e)}")
+
     def get_channel_uuid(self, channel_data):
         """
         Safely extract channel UUID from channel data with fallback options.
@@ -2920,6 +3133,9 @@ class TVHeadendClient(QMainWindow):
     def on_volume_changed(self, value):
         print(f"Debug: Volume changed to {value}")
         self.media_player.audio_set_volume(value)
+        # Save volume to config
+        self.config['volume'] = value
+        self.save_config()
 
     def eventFilter(self, obj, event):
         """Handle double-click and key events"""
@@ -2977,6 +3193,50 @@ class TVHeadendClient(QMainWindow):
             # Apply icon settings if changed
             if icon_size != self.config.get('icon_size', 48):
                 self.apply_icon_settings(icon_size)
+
+    def show_playback_mode(self):
+        """Show playback mode settings dialog"""
+        dialog = PlaybackDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # Get new playback mode
+            use_external = dialog.get_use_external_vlc()
+
+            # Apply playback mode if changed
+            if use_external != self.config.get('use_external_vlc', False):
+                self.config['use_external_vlc'] = use_external
+                self.save_config()
+                self.update_playback_controls_state()
+
+                # Show status message
+                mode = "External VLC" if use_external else "Internal VLC"
+                self.statusbar.showMessage(f"Playback mode changed to: {mode}")
+
+    def update_playback_controls_state(self):
+        """Enable/disable playback controls based on external VLC setting"""
+        use_external = self.config.get('use_external_vlc', False)
+
+        # Hide/show right pane based on mode
+        if use_external:
+            # External mode: hide entire right pane (video player + controls)
+            self.right_pane.hide()
+        else:
+            # Internal mode: show right pane
+            self.right_pane.show()
+
+        # Disable internal VLC controls when using external VLC
+        self.mute_btn.setEnabled(not use_external)
+        self.volume_slider.setEnabled(not use_external)
+        self.fullscreen_btn.setEnabled(not use_external)
+
+        # Update tooltips to indicate mode
+        if use_external:
+            self.mute_btn.setToolTip("Mute (disabled in external VLC mode)")
+            self.volume_slider.setToolTip("Volume control (disabled in external VLC mode)")
+            self.fullscreen_btn.setToolTip("Fullscreen (disabled in external VLC mode)")
+        else:
+            self.mute_btn.setToolTip("Toggle Mute")
+            self.volume_slider.setToolTip("")
+            self.fullscreen_btn.setToolTip("Toggle Fullscreen")
 
     def apply_icon_settings(self, icon_size):
         """Apply new icon size settings"""
@@ -3650,6 +3910,7 @@ class TVHeadendClient(QMainWindow):
                 default_recording = str(Path.home() / 'Videos') if sys.platform == 'win32' else str(Path.home())
                 return {
                     'volume': 50,
+                    'use_external_vlc': False,
                     'last_server': 0,
                     'recording_path': default_recording,
                     'window_geometry': {
@@ -3669,6 +3930,7 @@ class TVHeadendClient(QMainWindow):
         default_recording = str(Path.home() / 'Videos') if sys.platform == 'win32' else str(Path.home())
         return {
             'volume': 50,
+            'use_external_vlc': False,
             'last_server': 0,
             'recording_path': default_recording,
             'window_geometry': {
@@ -3692,6 +3954,17 @@ class TVHeadendClient(QMainWindow):
             self.splitter_timer.stop()  # Stop timer to prevent double-save
         if hasattr(self, 'pending_splitter_sizes') and self.pending_splitter_sizes:
             self.save_splitter_sizes()
+
+        # Clean up any remaining temporary M3U files (backup cleanup)
+        if hasattr(self, 'temp_m3u_files'):
+            for temp_file in list(self.temp_m3u_files):  # Copy list to avoid modification during iteration
+                try:
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
+                        print(f"Debug: Cleaned up temp M3U file on close: {temp_file}")
+                except Exception as e:
+                    print(f"Debug: Error cleaning up temp file on close: {str(e)}")
+            self.temp_m3u_files.clear()
 
         self.save_config()
         super().closeEvent(event)
@@ -3831,23 +4104,93 @@ class TVHeadendClient(QMainWindow):
                     stream_url = f'{server_url}/stream/channel/{channel_uuid}'
                 print(f"Debug: Stream URL: {stream_url}")
 
-                # Create and configure media
-                media = self.instance.media_new(stream_url)
-                if not media:
-                    raise RuntimeError("Failed to create VLC media object")
+                # Check if external VLC is enabled
+                use_external = self.config.get('use_external_vlc', False)
 
-                # Set media and attempt playback with error handling
-                self.media_player.set_media(media)
+                if use_external:
+                    # External VLC mode - open stream in external VLC player
 
-                # Start playback - this may fail silently or cause issues later
-                play_result = self.media_player.play()
+                    # Extract current program info from channel table for M3U EXTINF tag
+                    channel_name = channel_data.get('name', 'Unknown Channel')
+                    current_program_title = ''
 
-                if play_result == -1:
-                    # Play failed immediately
-                    raise RuntimeError("VLC play() returned error (-1)")
+                    try:
+                        # Search for the channel row in table to get EPG data
+                        for row in range(self.channel_list.rowCount()):
+                            name_item = self.channel_list.item(row, 2)
+                            if name_item:
+                                row_channel_data = name_item.data(Qt.ItemDataRole.UserRole)
+                                if row_channel_data and self.get_channel_uuid(row_channel_data) == channel_uuid:
+                                    # Found the row - get current program from column 3
+                                    epg_item = self.channel_list.item(row, 3)
+                                    if epg_item:
+                                        epg_data = epg_item.data(Qt.ItemDataRole.UserRole)
+                                        if epg_data and 'title' in epg_data:
+                                            current_program_title = epg_data['title']
+                                    break
+                    except Exception as e:
+                        print(f"Debug: Could not extract EPG info for M3U: {str(e)}")
 
-                print(f"Debug: Started playback (play() returned {play_result})")
-                self.statusbar.showMessage(f"Playing: {channel_data.get('name', 'Unknown Channel')}")
+                    vlc_binary = self.find_vlc_binary()
+
+                    if not vlc_binary:
+                        QMessageBox.critical(
+                            self,
+                            "VLC Not Found",
+                            "VLC media player not found on your system.\n\n"
+                            "Please install VLC or switch to internal player mode in Settings → Playback Mode."
+                        )
+                        return
+
+                    try:
+                        # Create M3U playlist with credentials (secure - not in process list)
+                        playlist_path = self.create_vlc_playlist(
+                            server_url=server_url,  # Clean URL without auth
+                            channel_uuid=channel_uuid,
+                            username=server.get('username', ''),
+                            password=server.get('password', ''),
+                            channel_name=channel_name,
+                            current_program=current_program_title
+                        )
+
+                        # Track for cleanup
+                        self.temp_m3u_files.append(playlist_path)
+
+                        # Launch external VLC with playlist file
+                        import subprocess
+                        subprocess.Popen([vlc_binary, playlist_path])
+                        print(f"Debug: Opened stream in external VLC: {vlc_binary}")
+                        self.statusbar.showMessage(f"Opened in external VLC: {channel_data.get('name', 'Unknown Channel')}")
+
+                        # Schedule delayed cleanup (5 seconds - VLC should have opened the file by then)
+                        QTimer.singleShot(5000, lambda: self.cleanup_temp_file(playlist_path))
+
+                    except Exception as e:
+                        QMessageBox.critical(
+                            self,
+                            "VLC Launch Error",
+                            f"Failed to launch external VLC:\n{str(e)}"
+                        )
+                        print(f"Debug: Error launching external VLC: {str(e)}")
+                else:
+                    # Internal VLC mode - use built-in player
+                    # Create and configure media
+                    media = self.instance.media_new(stream_url)
+                    if not media:
+                        raise RuntimeError("Failed to create VLC media object")
+
+                    # Set media and attempt playback with error handling
+                    self.media_player.set_media(media)
+
+                    # Start playback - this may fail silently or cause issues later
+                    play_result = self.media_player.play()
+
+                    if play_result == -1:
+                        # Play failed immediately
+                        raise RuntimeError("VLC play() returned error (-1)")
+
+                    print(f"Debug: Started playback (play() returned {play_result})")
+                    self.statusbar.showMessage(f"Playing: {channel_data.get('name', 'Unknown Channel')}")
 
                 # Note: Even if play() succeeds, stream errors may occur later
                 # VLC will handle these internally, but may log errors or stop playback
